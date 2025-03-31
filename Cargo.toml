@@ -1,0 +1,12 @@
+[package]
+name = "preshared-entanglement-sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.96"
+priority-queue = "2.1.2"
+rand = "0.9.0"
+rand_distr = "0.5.1"
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.139"
