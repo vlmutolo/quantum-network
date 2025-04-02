@@ -1,59 +1,123 @@
-use simulation::{SimParams, simulate};
+use std::path::PathBuf;
 
-use crate::network::NetworkState;
+use peer::DirectGraph;
+use simulation::{LogFrequency, SimLog, SimParams, Simulation, TimeMillis};
 
-fn main() {
-    let network = NetworkState::init();
+// TODO(improvement): these should be a parameters of individual nodes and links.
+const DECOHERENCE_FACTOR: f64 = 0.1;
+const LINK_RATE: f64 = 1.0;
+
+fn main() -> anyhow::Result<()> {
+    let direct_graph = DirectGraph::random(100, 0.01, &mut rand::rng());
     let params = SimParams {
-        indirect_rate: todo!(),
+        indirect_rate: 10.0,
+        tick_interval: 1,
+        log_frequency: LogFrequency::All,
     };
 
-    let logs = simulate(network, params);
+    let mut simulation = Simulation::new(params, direct_graph);
+
+    let logs = simulation.run(10_000, &mut rand::rng());
+    write_simlogs_to_parquet("simlogs.parquet".into(), logs)?;
+
+    Ok(())
+}
+
+fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<()> {
+    use polars::prelude::ParquetWriter;
+
+    let (peers_a, peers_b, capacities): (Vec<_>, Vec<_>, Vec<_>) = logs
+        .iter()
+        .flat_map(|log| {
+            log.indirect
+                .edges()
+                .map(|(a, b, edge)| (a as u64, b as u64, edge.link_capacity))
+        })
+        .collect();
+
+    let times: Vec<TimeMillis> = logs
+        .iter()
+        .flat_map(|log| log.indirect.edges().map(|_| log.time))
+        .collect();
+
+    let mut df = polars::df!(
+        "time" => times,
+        "peer_a" => peers_a,
+        "peer_b" => peers_b,
+        "link_capacity" => capacities,
+    )
+    .unwrap();
+
+    let mut file = std::fs::File::create(path)?;
+    ParquetWriter::new(&mut file).finish(&mut df)?;
+
+    Ok(())
 }
 
 pub mod simulation {
-    use priority_queue::PriorityQueue;
+    use rand::Rng;
 
-    use crate::{network::NetworkState, node::NodeId};
+    use crate::peer::{DirectGraph, IndirectGraph};
 
-    /// This is the base unit of time in the system, in nanoseconds.
-    pub type Time = u64;
+    /// This is the base unit of time in the system, in milliseconds.
+    pub type TimeMillis = u64;
 
-    /// Expected number of events per nanosecond.
+    /// Expected number of events per timestep.
     pub type Rate = f64;
 
-    struct Simulation {
+    pub struct Simulation {
         params: SimParams,
-        log: SimLog,
-        timer: PriorityQueue<Event, Time>,
-        node_last_update_times: Vec<Time>,
-        network: NetworkState,
+        direct_graph: DirectGraph,
+        indirect_graph: IndirectGraph,
+        current_time: TimeMillis,
     }
 
     impl Simulation {
-        pub fn new(params: SimParams, network: NetworkState) -> Self {
-            let log = SimLog {};
-            let timer = PriorityQueue::new();
-            let node_last_update_times =
-                Vec::from_iter(std::iter::repeat_n(0, network.len_nodes()));
+        pub fn run<R: Rng>(&mut self, stop_time: TimeMillis, rng: &mut R) -> Vec<SimLog> {
+            // TODO(perf): this function should maybe be able to
+            // stream results to a parquet dataframe.
 
-            Self {
-                params,
-                log,
-                timer,
-                node_last_update_times,
-                network,
+            let mut logs = Vec::new();
+
+            let num_ticks = stop_time
+                .saturating_sub(self.current_time)
+                .checked_div(self.params.tick_interval)
+                .unwrap();
+
+            for _ in 0..num_ticks - 1 {
+                let tick_log = self.tick(self.params.tick_interval, rng);
+                match self.params.log_frequency {
+                    LogFrequency::Final => (),
+                    LogFrequency::All => logs.push(tick_log),
+                }
+            }
+
+            let tick_logs = self.tick(self.params.tick_interval, rng);
+            logs.push(tick_logs);
+
+            logs
+        }
+
+        fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) -> SimLog {
+            self.indirect_graph.tick(interval, rng);
+            self.direct_graph
+                .tick(interval, &mut self.indirect_graph, rng);
+            self.current_time += interval;
+
+            // TODO(opt): we always create these logs even though they may
+            // not be used. Can we do something smarter?
+            SimLog {
+                indirect: self.indirect_graph.clone(),
+                time: self.current_time,
             }
         }
 
-        pub fn run(&mut self, stop_time: Option<Time>) {
-            todo!()
-        }
-
-        fn handle_event(&mut self, event: Event) {
-            match event {
-                Event::EntanglementSwap(exchange_event) => todo!(),
-                Event::GeneratePair(generate_pair_event) => todo!(),
+        pub fn new(params: SimParams, direct_graph: DirectGraph) -> Self {
+            Self {
+                params,
+                current_time: 0,
+                direct_graph,
+                indirect_graph: IndirectGraph::default(),
             }
         }
     }
@@ -62,94 +126,132 @@ pub mod simulation {
         /// Effective channel capacity for indirect connections. This basically
         /// accounts for how many entanglement swaps per second a node can perform.
         pub indirect_rate: Rate,
+
+        /// How far to advance in time per simulation step.
+        pub tick_interval: TimeMillis,
+
+        /// Whether or not to save all intermediate states of the simulation.
+        pub log_frequency: LogFrequency,
     }
 
-    /// Summary stats for a snapshot of the network state
-    pub struct SimLog {}
-
-    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-    enum Event {
-        /// Two connected peers swap their entanglement.
-        EntanglementSwap(EntanglementSwapEvent),
-
-        /// Two peers jk
-        GeneratePair(GeneratePairEvent),
+    pub enum LogFrequency {
+        Final,
+        All,
     }
 
-    /// A node randomly chooses one of its direct
-    /// peers to generate a new Bell pair with.
-    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-    struct GeneratePairEvent {
-        node: NodeId,
-    }
-
-    /// A node randomly chooses two of its peers (either direct or indirect)
-    /// to connect via entanglement swapping. The node loses its connection
-    /// (or decreases the weight of its connections) in the process.
-    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-    struct EntanglementSwapEvent {
-        node: NodeId,
+    /// Summary of a snapshot of the network state
+    pub struct SimLog {
+        pub indirect: IndirectGraph,
+        pub time: TimeMillis,
     }
 }
 
-pub mod network {
-    use crate::node::{NodeId, NodeState};
+pub mod peer {
+    use std::collections::HashMap;
 
-    pub struct NetworkState {
-        nodes: Vec<NodeState>,
-    }
-
-    impl NetworkState {
-        pub fn init() -> Self {
-            todo!()
-        }
-
-        pub fn len_nodes(&self) -> usize {
-            self.nodes.len()
-        }
-
-        pub fn node_mut(&mut self, node_id: NodeId) -> &mut NodeState {
-            self.nodes.get_mut(node_id).unwrap()
-        }
-    }
-}
-
-pub mod node {
     use rand::Rng;
-    use rand_distr::{Distribution as _, Poisson};
+    use rand_distr::{Binomial, Distribution as _, Poisson};
 
-    use crate::simulation::{Rate, Time};
+    use crate::{
+        DECOHERENCE_FACTOR, LINK_RATE,
+        simulation::{Rate, TimeMillis},
+    };
 
     pub type NodeId = usize;
 
-    pub struct NodeState {
-        direct_peers: Vec<DirectPeer>,
-        indirect_peers: Vec<IndirectPeer>,
-        last_updated: Time,
+    /// Holds the connections between nodes that are physically linked and
+    /// can generate entangled pairs on-demand.
+    #[derive(Clone, Debug, Default)]
+    pub struct DirectGraph {
+        map: HashMap<(NodeId, NodeId), DirectEdge>,
     }
 
-    impl NodeState {
-        /// Account for decoherence by removing a certain number of qubits
-        /// randomly based on sampling from Poisson distribution.
-        fn update<R: Rng>(&mut self, time_delta: Time, decoherence_rate: Rate, rng: &mut R) {
-            let expected_number = decoherence_rate * time_delta as f64;
-            let dist = Poisson::new(expected_number).unwrap();
-            let num_decoherences: f64 = dist.sample(rng);
+    impl DirectGraph {
+        pub fn tick<R: Rng>(
+            &self,
+            interval: TimeMillis,
+            indirect_peer_map: &mut IndirectGraph,
+            rng: &mut R,
+        ) {
+            for ((peer_a, peer_b), direct_edge) in self.map.iter() {
+                let num_pairs_expected = direct_edge.link_rate * interval as f64;
+                let num_pairs_generated = Poisson::new(num_pairs_expected).unwrap().sample(rng);
+
+                let indirect_edge = indirect_peer_map
+                    .map
+                    .entry((*peer_a, *peer_b))
+                    .or_insert(IndirectEdge { link_capacity: 0 });
+
+                indirect_edge.link_capacity += num_pairs_generated as u64;
+            }
+        }
+
+        /// Generate a new DirectGraph with random connections.
+        pub fn random<R: Rng>(num_nodes: usize, density: f64, rng: &mut R) -> Self {
+            let mut direct_map = HashMap::new();
+
+            for i in 0..num_nodes {
+                for j in 0..num_nodes {
+                    if i == j {
+                        continue;
+                    }
+
+                    if rng.random_bool(density) {
+                        let old_val = direct_map.insert(
+                            (i, j),
+                            DirectEdge {
+                                link_rate: LINK_RATE,
+                            },
+                        );
+                        assert!(old_val.is_none());
+                    }
+                }
+            }
+
+            Self { map: direct_map }
         }
     }
 
-    struct DirectPeer {
-        peer_id: NodeId,
-
+    #[derive(Clone, Debug)]
+    struct DirectEdge {
         /// How many Bell pairs can be (successfully) exchanged per time step
-        link_capacity: u64,
+        link_rate: Rate,
     }
 
-    struct IndirectPeer {
-        peer_id: usize,
+    #[derive(Clone, Debug, Default)]
+    pub struct IndirectGraph {
+        map: HashMap<(NodeId, NodeId), IndirectEdge>,
+    }
 
+    impl IndirectGraph {
+        pub fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
+            for indirect_edge in self.map.values_mut() {
+                let p_single_decay = 1.0 - (-DECOHERENCE_FACTOR * interval as f64).exp();
+                let dist = Binomial::new(indirect_edge.link_capacity, p_single_decay).unwrap();
+                let num_decoherences: u64 = dist.sample(rng);
+
+                indirect_edge.link_capacity = indirect_edge
+                    .link_capacity
+                    .checked_sub(num_decoherences)
+                    .unwrap();
+
+                if indirect_edge.link_capacity == 0 {
+                    // TODO(improvement): for consistency, maybe we should
+                    // figure out a way to fully remove this edge so we
+                    // don't get a bunch of "zero" entries in the log.
+                }
+            }
+        }
+
+        pub fn edges(&self) -> impl Iterator<Item = (NodeId, NodeId, &IndirectEdge)> + '_ {
+            self.map.iter().map(|((a, b), edge)| (*a, *b, edge))
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct IndirectEdge {
         /// How many Bell pairs have been (successfully) pre-exchanged and
         /// are now in storage waiting to execute teleportation
-        link_capacity: u64,
+        pub link_capacity: u64,
     }
 }
