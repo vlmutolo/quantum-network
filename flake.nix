@@ -7,7 +7,7 @@
   inputs = {
     flake-schemas.url = "https://flakehub.com/f/DeterminateSystems/flake-schemas/*";
 
-    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/*";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
       url = "https://flakehub.com/f/oxalica/rust-overlay/*";
@@ -22,7 +22,7 @@
       overlays = [
         rust-overlay.overlays.default
         (final: prev: {
-          rustToolchain = final.rust-bin.stable.latest.default.override { extensions = [ "rust-src" ]; };
+          rustToolchain = final.rust-bin.stable."1.85.0".default.override { extensions = [ "rust-src" ]; };
         })
       ];
 
@@ -112,6 +112,7 @@
             rust-analyzer
             git
             nixpkgs-fmt
+            nil
 
             # Add a custom 'fmt' command to format both Nix and Rust code
             (pkgs.writeShellScriptBin "format" ''

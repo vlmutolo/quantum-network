@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use peer::DirectGraph;
+use peer::NeighborGraph;
 use simulation::{LogFrequency, SimLog, SimParams, Simulation, TimeMillis};
 
 // TODO(improvement): these should be a parameters of individual nodes and links.
@@ -8,7 +8,7 @@ const DECOHERENCE_FACTOR: f64 = 0.1;
 const LINK_RATE: f64 = 1.0;
 
 fn main() -> anyhow::Result<()> {
-    let direct_graph = DirectGraph::random(100, 0.01, &mut rand::rng());
+    let direct_graph = NeighborGraph::random(100, 0.01, &mut rand::rng());
     let params = SimParams {
         indirect_rate: 10.0,
         tick_interval: 1,
@@ -57,7 +57,7 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
 pub mod simulation {
     use rand::Rng;
 
-    use crate::peer::{DirectGraph, IndirectGraph};
+    use crate::peer::{EntangleGraph, NeighborGraph};
 
     /// This is the base unit of time in the system, in milliseconds.
     pub type TimeMillis = u64;
@@ -67,8 +67,8 @@ pub mod simulation {
 
     pub struct Simulation {
         params: SimParams,
-        direct_graph: DirectGraph,
-        indirect_graph: IndirectGraph,
+        neighbor_graph: NeighborGraph,
+        entangle_graph: EntangleGraph,
         current_time: TimeMillis,
     }
 
@@ -99,25 +99,25 @@ pub mod simulation {
         }
 
         fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) -> SimLog {
-            self.indirect_graph.tick(interval, rng);
-            self.direct_graph
-                .tick(interval, &mut self.indirect_graph, rng);
+            self.entangle_graph.tick(interval, rng);
+            self.neighbor_graph
+                .tick(interval, &mut self.entangle_graph, rng);
             self.current_time += interval;
 
             // TODO(opt): we always create these logs even though they may
             // not be used. Can we do something smarter?
             SimLog {
-                indirect: self.indirect_graph.clone(),
+                indirect: self.entangle_graph.clone(),
                 time: self.current_time,
             }
         }
 
-        pub fn new(params: SimParams, direct_graph: DirectGraph) -> Self {
+        pub fn new(params: SimParams, direct_graph: NeighborGraph) -> Self {
             Self {
                 params,
                 current_time: 0,
-                direct_graph,
-                indirect_graph: IndirectGraph::default(),
+                neighbor_graph: direct_graph,
+                entangle_graph: EntangleGraph::default(),
             }
         }
     }
@@ -141,7 +141,7 @@ pub mod simulation {
 
     /// Summary of a snapshot of the network state
     pub struct SimLog {
-        pub indirect: IndirectGraph,
+        pub indirect: EntangleGraph,
         pub time: TimeMillis,
     }
 }
@@ -162,15 +162,15 @@ pub mod peer {
     /// Holds the connections between nodes that are physically linked and
     /// can generate entangled pairs on-demand.
     #[derive(Clone, Debug, Default)]
-    pub struct DirectGraph {
+    pub struct NeighborGraph {
         map: HashMap<(NodeId, NodeId), DirectEdge>,
     }
 
-    impl DirectGraph {
+    impl NeighborGraph {
         pub fn tick<R: Rng>(
             &self,
             interval: TimeMillis,
-            indirect_peer_map: &mut IndirectGraph,
+            indirect_peer_map: &mut EntangleGraph,
             rng: &mut R,
         ) {
             for ((peer_a, peer_b), direct_edge) in self.map.iter() {
@@ -219,11 +219,11 @@ pub mod peer {
     }
 
     #[derive(Clone, Debug, Default)]
-    pub struct IndirectGraph {
+    pub struct EntangleGraph {
         map: HashMap<(NodeId, NodeId), IndirectEdge>,
     }
 
-    impl IndirectGraph {
+    impl EntangleGraph {
         pub fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
             for indirect_edge in self.map.values_mut() {
                 let p_single_decay = 1.0 - (-DECOHERENCE_FACTOR * interval as f64).exp();
