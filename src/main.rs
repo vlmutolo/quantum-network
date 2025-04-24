@@ -8,14 +8,14 @@ const DECOHERENCE_FACTOR: f64 = 0.1;
 const LINK_RATE: f64 = 1.0;
 
 fn main() -> anyhow::Result<()> {
-    let direct_graph = NeighborGraph::random(100, 0.01, &mut rand::rng());
+    let neighbor_graph = NeighborGraph::random(100, 0.01, &mut rand::rng());
     let params = SimParams {
-        indirect_rate: 10.0,
+        swap_fraction: 10.0,
         tick_interval: 1,
         log_frequency: LogFrequency::All,
     };
 
-    let mut simulation = Simulation::new(params, direct_graph);
+    let mut simulation = Simulation::new(params, neighbor_graph);
 
     let logs = simulation.run(10_000, &mut rand::rng());
     write_simlogs_to_parquet("simlogs.parquet".into(), logs)?;
@@ -29,7 +29,7 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
     let (peers_a, peers_b, capacities): (Vec<_>, Vec<_>, Vec<_>) = logs
         .iter()
         .flat_map(|log| {
-            log.indirect
+            log.entangle_graph
                 .edges()
                 .map(|(a, b, edge)| (a as u64, b as u64, edge.link_capacity))
         })
@@ -37,7 +37,7 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
 
     let times: Vec<TimeMillis> = logs
         .iter()
-        .flat_map(|log| log.indirect.edges().map(|_| log.time))
+        .flat_map(|log| log.entangle_graph.edges().map(|_| log.time))
         .collect();
 
     let mut df = polars::df!(
@@ -107,25 +107,25 @@ pub mod simulation {
             // TODO(opt): we always create these logs even though they may
             // not be used. Can we do something smarter?
             SimLog {
-                indirect: self.entangle_graph.clone(),
+                entangle_graph: self.entangle_graph.clone(),
                 time: self.current_time,
             }
         }
 
-        pub fn new(params: SimParams, direct_graph: NeighborGraph) -> Self {
+        pub fn new(params: SimParams, neighbor_graph: NeighborGraph) -> Self {
             Self {
                 params,
                 current_time: 0,
-                neighbor_graph: direct_graph,
+                neighbor_graph,
                 entangle_graph: EntangleGraph::default(),
             }
         }
     }
 
     pub struct SimParams {
-        /// Effective channel capacity for indirect connections. This basically
-        /// accounts for how many entanglement swaps per second a node can perform.
-        pub indirect_rate: Rate,
+        /// This describes what fraction of an entangled channel capacity will
+        /// be spent to feed new edges in the entanglement graph.
+        pub swap_fraction: Rate,
 
         /// How far to advance in time per simulation step.
         pub tick_interval: TimeMillis,
@@ -141,7 +141,7 @@ pub mod simulation {
 
     /// Summary of a snapshot of the network state
     pub struct SimLog {
-        pub indirect: EntangleGraph,
+        pub entangle_graph: EntangleGraph,
         pub time: TimeMillis,
     }
 }
@@ -163,32 +163,32 @@ pub mod peer {
     /// can generate entangled pairs on-demand.
     #[derive(Clone, Debug, Default)]
     pub struct NeighborGraph {
-        map: HashMap<(NodeId, NodeId), DirectEdge>,
+        map: HashMap<(NodeId, NodeId), NeighborEdge>,
     }
 
     impl NeighborGraph {
         pub fn tick<R: Rng>(
             &self,
             interval: TimeMillis,
-            indirect_peer_map: &mut EntangleGraph,
+            entangle_peer_map: &mut EntangleGraph,
             rng: &mut R,
         ) {
-            for ((peer_a, peer_b), direct_edge) in self.map.iter() {
-                let num_pairs_expected = direct_edge.link_rate * interval as f64;
+            for ((peer_a, peer_b), neighbor_edge) in self.map.iter() {
+                let num_pairs_expected = neighbor_edge.link_rate * interval as f64;
                 let num_pairs_generated = Poisson::new(num_pairs_expected).unwrap().sample(rng);
 
-                let indirect_edge = indirect_peer_map
+                let entangle_edge = entangle_peer_map
                     .map
                     .entry((*peer_a, *peer_b))
-                    .or_insert(IndirectEdge { link_capacity: 0 });
+                    .or_insert(EntangleEdge { link_capacity: 0 });
 
-                indirect_edge.link_capacity += num_pairs_generated as u64;
+                entangle_edge.link_capacity += num_pairs_generated as u64;
             }
         }
 
-        /// Generate a new DirectGraph with random connections.
+        /// Generate a new NeighborGraph with random connections.
         pub fn random<R: Rng>(num_nodes: usize, density: f64, rng: &mut R) -> Self {
-            let mut direct_map = HashMap::new();
+            let mut neighbor_map = HashMap::new();
 
             for i in 0..num_nodes {
                 for j in 0..num_nodes {
@@ -197,9 +197,9 @@ pub mod peer {
                     }
 
                     if rng.random_bool(density) {
-                        let old_val = direct_map.insert(
+                        let old_val = neighbor_map.insert(
                             (i, j),
-                            DirectEdge {
+                            NeighborEdge {
                                 link_rate: LINK_RATE,
                             },
                         );
@@ -208,34 +208,34 @@ pub mod peer {
                 }
             }
 
-            Self { map: direct_map }
+            Self { map: neighbor_map }
         }
     }
 
     #[derive(Clone, Debug)]
-    struct DirectEdge {
+    struct NeighborEdge {
         /// How many Bell pairs can be (successfully) exchanged per time step
         link_rate: Rate,
     }
 
     #[derive(Clone, Debug, Default)]
     pub struct EntangleGraph {
-        map: HashMap<(NodeId, NodeId), IndirectEdge>,
+        map: HashMap<(NodeId, NodeId), EntangleEdge>,
     }
 
     impl EntangleGraph {
         pub fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
-            for indirect_edge in self.map.values_mut() {
+            for entangle_edge in self.map.values_mut() {
                 let p_single_decay = 1.0 - (-DECOHERENCE_FACTOR * interval as f64).exp();
-                let dist = Binomial::new(indirect_edge.link_capacity, p_single_decay).unwrap();
+                let dist = Binomial::new(entangle_edge.link_capacity, p_single_decay).unwrap();
                 let num_decoherences: u64 = dist.sample(rng);
 
-                indirect_edge.link_capacity = indirect_edge
+                entangle_edge.link_capacity = entangle_edge
                     .link_capacity
                     .checked_sub(num_decoherences)
                     .unwrap();
 
-                if indirect_edge.link_capacity == 0 {
+                if entangle_edge.link_capacity == 0 {
                     // TODO(improvement): for consistency, maybe we should
                     // figure out a way to fully remove this edge so we
                     // don't get a bunch of "zero" entries in the log.
@@ -243,13 +243,13 @@ pub mod peer {
             }
         }
 
-        pub fn edges(&self) -> impl Iterator<Item = (NodeId, NodeId, &IndirectEdge)> + '_ {
+        pub fn edges(&self) -> impl Iterator<Item = (NodeId, NodeId, &EntangleEdge)> + '_ {
             self.map.iter().map(|((a, b), edge)| (*a, *b, edge))
         }
     }
 
     #[derive(Clone, Debug)]
-    pub struct IndirectEdge {
+    pub struct EntangleEdge {
         /// How many Bell pairs have been (successfully) pre-exchanged and
         /// are now in storage waiting to execute teleportation
         pub link_capacity: u64,
