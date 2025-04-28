@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut simulation = Simulation::new(params, direct_graph);
 
-    let logs = simulation.run(20_000, &mut rand::rng());
+    let logs = simulation.run(500, &mut rand::rng());
     write_simlogs_to_parquet("results/simlogs.parquet".into(), logs)?;
 
     Ok(())
@@ -40,6 +40,8 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
         .flat_map(|log| log.entangle_graph.edges().map(|_| log.time))
         .collect();
 
+    let max_flow_averages: Vec<f64> = logs.iter().map(|log| log.max_flow_avg).collect();
+
     let mut df = polars::df!(
         "time" => times,
         "peer_a" => peers_a,
@@ -48,8 +50,16 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
     )
     .unwrap();
 
+    let mut df2 = polars::df!(
+        "max_flow_averages" => max_flow_averages,
+    )
+    .unwrap();
+
     let mut file = std::fs::File::create(path)?;
     ParquetWriter::new(&mut file).finish(&mut df)?;
+
+    let mut file2 = std::fs::File::create("max_flows.parquet")?;
+    ParquetWriter::new(&mut file2).finish(&mut df2)?;
 
     Ok(())
 }
@@ -105,11 +115,27 @@ pub mod simulation {
                 .tick(interval, &mut self.entangle_graph, rng);
             self.current_time += interval;
 
+            const MAX_FLOW_COUNT: u64 = 50;
+            let mut max_flow_sum = 0;
+            for _ in 0..MAX_FLOW_COUNT {
+                let node_a = rng.random_range(0..self.direct_graph.num_nodes());
+                let node_b = loop {
+                    let candidate = rng.random_range(0..self.direct_graph.num_nodes());
+                    if candidate != node_a {
+                        break candidate;
+                    }
+                };
+
+                max_flow_sum += self.entangle_graph.max_flow(node_a, node_b);
+            }
+            let max_flow_avg = max_flow_sum as f64 / MAX_FLOW_COUNT as f64;
+
             // TODO(opt): we always create these logs even though they may
             // not be used. Can we do something smarter?
             SimLog {
                 entangle_graph: self.entangle_graph.clone(),
                 time: self.current_time,
+                max_flow_avg,
             }
         }
 
@@ -144,6 +170,7 @@ pub mod simulation {
     pub struct SimLog {
         pub entangle_graph: EntangleGraph,
         pub time: TimeMillis,
+        pub max_flow_avg: f64,
     }
 }
 
@@ -158,16 +185,21 @@ pub mod peer {
         simulation::{Rate, TimeMillis},
     };
 
-    pub type NodeId = usize;
+    pub type NodeId = u64;
 
     /// Holds the connections between nodes that are physically linked and
     /// can generate entangled pairs on-demand.
     #[derive(Clone, Debug, Default)]
     pub struct DirectGraph {
+        num_nodes: u64,
         map: HashMap<(NodeId, NodeId), NeighborEdge>,
     }
 
     impl DirectGraph {
+        pub fn num_nodes(&self) -> u64 {
+            self.num_nodes
+        }
+
         pub fn tick<R: Rng>(
             &self,
             interval: TimeMillis,
@@ -182,7 +214,7 @@ pub mod peer {
         }
 
         /// Generate a new DirectGraph with random connections.
-        pub fn random<R: Rng>(num_nodes: usize, density: f64, rng: &mut R) -> Self {
+        pub fn random<R: Rng>(num_nodes: u64, density: f64, rng: &mut R) -> Self {
             let mut neighbor_map = HashMap::new();
 
             for i in 0..num_nodes {
@@ -203,7 +235,10 @@ pub mod peer {
                 }
             }
 
-            Self { map: neighbor_map }
+            Self {
+                map: neighbor_map,
+                num_nodes,
+            }
         }
     }
 
