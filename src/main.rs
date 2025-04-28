@@ -4,20 +4,20 @@ use peer::DirectGraph;
 use simulation::{LogFrequency, SimLog, SimParams, Simulation, TimeMillis};
 
 // TODO(improvement): these should be a parameters of individual nodes and links.
-const DECOHERENCE_FACTOR: f64 = 0.1;
-const LINK_RATE: f64 = 1.0;
+const DECOHERENCE_FACTOR: f64 = 0.1; // TODO(!): make this not zero
+const LINK_RATE: f64 = 5.0;
 
 fn main() -> anyhow::Result<()> {
-    let direct_graph = DirectGraph::random(4, 0.5, &mut rand::rng());
+    let direct_graph = DirectGraph::random(50, 0.5, &mut rand::rng());
     let params = SimParams {
-        swap_fraction: 0.5,
+        swap_fraction: 0.2,
         tick_interval: 1,
         log_frequency: LogFrequency::All,
     };
 
     let mut simulation = Simulation::new(params, direct_graph);
 
-    let logs = simulation.run(10_000, &mut rand::rng());
+    let logs = simulation.run(20_000, &mut rand::rng());
     write_simlogs_to_parquet("results/simlogs.parquet".into(), logs)?;
 
     Ok(())
@@ -92,8 +92,8 @@ pub mod simulation {
                 }
             }
 
-            let tick_logs = self.tick(self.params.tick_interval, rng);
-            logs.push(tick_logs);
+            let tick_log = self.tick(self.params.tick_interval, rng);
+            logs.push(tick_log);
 
             logs
         }
@@ -177,7 +177,6 @@ pub mod peer {
             for ((node_a, node_b), direct_edge) in self.map.iter() {
                 let num_pairs_expected = direct_edge.link_rate * interval as f64;
                 let num_pairs_generated = Poisson::new(num_pairs_expected).unwrap().sample(rng);
-
                 entangle_peer_map.add_capacity(num_pairs_generated as u64, *node_a, *node_b);
             }
         }
@@ -220,14 +219,19 @@ pub mod peer {
         edges: HashMap<(NodeId, NodeId), EntangleEdge>,
     }
 
+    /// Get a canonical key representing the edge between two nodes.
+    fn edge_key(node_a: NodeId, node_b: NodeId) -> (NodeId, NodeId) {
+        (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b))
+    }
+
     impl EntangleGraph {
         fn add_capacity(&mut self, capacity_amt: u64, node_a: NodeId, node_b: NodeId) {
-            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            let key = edge_key(node_a, node_b);
             let entry = self
                 .edges
                 .entry(key)
                 .or_insert(EntangleEdge { link_capacity: 0 });
-            entry.link_capacity.checked_add(capacity_amt).unwrap();
+            entry.link_capacity = entry.link_capacity.checked_add(capacity_amt).unwrap();
 
             let entry = self.neighbors.entry(node_a).or_default();
             let _ = entry.insert(node_b);
@@ -238,9 +242,9 @@ pub mod peer {
 
         /// PANICS: This will panic if you try to subtract more than a connection has.
         fn sub_capacity(&mut self, capacity_amt: u64, node_a: NodeId, node_b: NodeId) {
-            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            let key = edge_key(node_a, node_b);
             let entry = self.edges.get_mut(&key).unwrap();
-            entry.link_capacity.checked_sub(capacity_amt).unwrap();
+            entry.link_capacity = entry.link_capacity.checked_sub(capacity_amt).unwrap();
 
             if entry.link_capacity == 0 {
                 self.neighbors.get_mut(&node_a).unwrap().remove(&node_b);
@@ -249,7 +253,7 @@ pub mod peer {
         }
 
         pub fn get_capacity(&self, node_a: NodeId, node_b: NodeId) -> u64 {
-            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            let key = edge_key(node_a, node_b);
             match self.edges.get(&key) {
                 Some(entangle_edge) => entangle_edge.link_capacity,
                 None => 0,
@@ -305,5 +309,26 @@ pub mod peer {
         /// How many Bell pairs have been (successfully) pre-exchanged and
         /// are now in storage waiting to execute teleportation
         pub link_capacity: u64,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::EntangleGraph;
+
+        #[test]
+        fn test_entangle_graph_operations() {
+            let mut graph = EntangleGraph::default();
+
+            assert_eq!(0, graph.get_capacity(0, 1));
+            assert_eq!(0, graph.get_capacity(1, 0));
+
+            graph.add_capacity(1, 0, 1);
+            assert_eq!(1, graph.get_capacity(0, 1));
+            assert_eq!(1, graph.get_capacity(1, 0));
+
+            graph.sub_capacity(1, 1, 0);
+            assert_eq!(0, graph.get_capacity(0, 1));
+            assert_eq!(0, graph.get_capacity(1, 0));
+        }
     }
 }
