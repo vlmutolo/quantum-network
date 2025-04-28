@@ -148,7 +148,7 @@ pub mod simulation {
 }
 
 pub mod peer {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     use rand::{Rng, seq::IndexedRandom};
     use rand_distr::{Binomial, Distribution as _, Poisson};
@@ -301,6 +301,78 @@ pub mod peer {
 
         pub fn edges(&self) -> impl Iterator<Item = (NodeId, NodeId, &EntangleEdge)> + '_ {
             self.edges.iter().map(|((a, b), edge)| (*a, *b, edge))
+        }
+
+        pub fn max_flow(&self, source: NodeId, destination: NodeId) -> u64 {
+            let mut residual = self.edges.clone();
+            let mut max_flow = 0;
+
+            loop {
+                // Find a path from source to destination using BFS
+                let mut parent: HashMap<NodeId, Option<NodeId>> = HashMap::new();
+                let mut visited = HashSet::new();
+                let mut queue = VecDeque::new();
+
+                queue.push_back(source);
+                parent.insert(source, None);
+                visited.insert(source);
+
+                let mut found_destination = false;
+
+                while let Some(u) = queue.pop_front() {
+                    // TODO: change this to neighbour map code
+                    for ((from, to), edge) in residual.iter() {
+                        if *from == u && edge.link_capacity > 0 && !visited.contains(to) {
+                            parent.insert(*to, Some(u));
+                            if *to == destination {
+                                found_destination = true;
+                                break;
+                            }
+                            visited.insert(*to);
+                            queue.push_back(*to);
+                        }
+                    }
+                    if found_destination {
+                        break;
+                    }
+                }
+
+                // No augmenting path found
+                if !found_destination {
+                    break;
+                }
+
+                // Trace back to find bottleneck capacity
+                let mut path = vec![];
+                let mut cur = destination;
+                while let Some(&Some(prev)) = parent.get(&cur) {
+                    path.push((prev, cur));
+                    cur = prev;
+                }
+                path.reverse();
+
+                let min_capacity = path
+                    .iter()
+                    .map(|(u, v)| residual.get(&(*u, *v)).unwrap().link_capacity)
+                    .min()
+                    .unwrap();
+
+                // Augment the flow
+                for (u, v) in path.iter() {
+                    residual.get_mut(&(*u, *v)).unwrap().link_capacity -= min_capacity;
+                    // Add reverse edge
+                    residual
+                        .entry((*v, *u))
+                        .and_modify(|e| e.link_capacity += min_capacity)
+                        .or_insert(EntangleEdge {
+                            link_capacity: min_capacity,
+                        });
+                }
+
+                max_flow += min_capacity;
+            }
+
+            max_flow
         }
     }
 
