@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use peer::NeighborGraph;
+use peer::DirectGraph;
 use simulation::{LogFrequency, SimLog, SimParams, Simulation, TimeMillis};
 
 // TODO(improvement): these should be a parameters of individual nodes and links.
@@ -8,17 +8,17 @@ const DECOHERENCE_FACTOR: f64 = 0.1;
 const LINK_RATE: f64 = 1.0;
 
 fn main() -> anyhow::Result<()> {
-    let neighbor_graph = NeighborGraph::random(100, 0.01, &mut rand::rng());
+    let direct_graph = DirectGraph::random(4, 0.5, &mut rand::rng());
     let params = SimParams {
-        swap_fraction: 10.0,
+        swap_fraction: 0.5,
         tick_interval: 1,
         log_frequency: LogFrequency::All,
     };
 
-    let mut simulation = Simulation::new(params, neighbor_graph);
+    let mut simulation = Simulation::new(params, direct_graph);
 
     let logs = simulation.run(10_000, &mut rand::rng());
-    write_simlogs_to_parquet("simlogs.parquet".into(), logs)?;
+    write_simlogs_to_parquet("results/simlogs.parquet".into(), logs)?;
 
     Ok(())
 }
@@ -57,7 +57,7 @@ fn write_simlogs_to_parquet(path: PathBuf, logs: Vec<SimLog>) -> anyhow::Result<
 pub mod simulation {
     use rand::Rng;
 
-    use crate::peer::{EntangleGraph, NeighborGraph};
+    use crate::peer::{DirectGraph, EntangleGraph};
 
     /// This is the base unit of time in the system, in milliseconds.
     pub type TimeMillis = u64;
@@ -67,7 +67,7 @@ pub mod simulation {
 
     pub struct Simulation {
         params: SimParams,
-        neighbor_graph: NeighborGraph,
+        direct_graph: DirectGraph,
         entangle_graph: EntangleGraph,
         current_time: TimeMillis,
     }
@@ -99,8 +99,9 @@ pub mod simulation {
         }
 
         fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) -> SimLog {
-            self.entangle_graph.tick(interval, rng);
-            self.neighbor_graph
+            self.entangle_graph
+                .tick(interval, self.params.swap_fraction, rng);
+            self.direct_graph
                 .tick(interval, &mut self.entangle_graph, rng);
             self.current_time += interval;
 
@@ -112,11 +113,11 @@ pub mod simulation {
             }
         }
 
-        pub fn new(params: SimParams, neighbor_graph: NeighborGraph) -> Self {
+        pub fn new(params: SimParams, direct_graph: DirectGraph) -> Self {
             Self {
                 params,
                 current_time: 0,
-                neighbor_graph,
+                direct_graph,
                 entangle_graph: EntangleGraph::default(),
             }
         }
@@ -147,9 +148,9 @@ pub mod simulation {
 }
 
 pub mod peer {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
-    use rand::Rng;
+    use rand::{Rng, seq::IndexedRandom};
     use rand_distr::{Binomial, Distribution as _, Poisson};
 
     use crate::{
@@ -162,31 +163,26 @@ pub mod peer {
     /// Holds the connections between nodes that are physically linked and
     /// can generate entangled pairs on-demand.
     #[derive(Clone, Debug, Default)]
-    pub struct NeighborGraph {
+    pub struct DirectGraph {
         map: HashMap<(NodeId, NodeId), NeighborEdge>,
     }
 
-    impl NeighborGraph {
+    impl DirectGraph {
         pub fn tick<R: Rng>(
             &self,
             interval: TimeMillis,
             entangle_peer_map: &mut EntangleGraph,
             rng: &mut R,
         ) {
-            for ((peer_a, peer_b), neighbor_edge) in self.map.iter() {
-                let num_pairs_expected = neighbor_edge.link_rate * interval as f64;
+            for ((node_a, node_b), direct_edge) in self.map.iter() {
+                let num_pairs_expected = direct_edge.link_rate * interval as f64;
                 let num_pairs_generated = Poisson::new(num_pairs_expected).unwrap().sample(rng);
 
-                let entangle_edge = entangle_peer_map
-                    .map
-                    .entry((*peer_a, *peer_b))
-                    .or_insert(EntangleEdge { link_capacity: 0 });
-
-                entangle_edge.link_capacity += num_pairs_generated as u64;
+                entangle_peer_map.add_capacity(num_pairs_generated as u64, *node_a, *node_b);
             }
         }
 
-        /// Generate a new NeighborGraph with random connections.
+        /// Generate a new DirectGraph with random connections.
         pub fn random<R: Rng>(num_nodes: usize, density: f64, rng: &mut R) -> Self {
             let mut neighbor_map = HashMap::new();
 
@@ -220,31 +216,87 @@ pub mod peer {
 
     #[derive(Clone, Debug, Default)]
     pub struct EntangleGraph {
-        map: HashMap<(NodeId, NodeId), EntangleEdge>,
+        neighbors: HashMap<NodeId, HashSet<NodeId>>,
+        edges: HashMap<(NodeId, NodeId), EntangleEdge>,
     }
 
     impl EntangleGraph {
-        pub fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
-            for entangle_edge in self.map.values_mut() {
+        fn add_capacity(&mut self, capacity_amt: u64, node_a: NodeId, node_b: NodeId) {
+            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            let entry = self
+                .edges
+                .entry(key)
+                .or_insert(EntangleEdge { link_capacity: 0 });
+            entry.link_capacity.checked_add(capacity_amt).unwrap();
+
+            let entry = self.neighbors.entry(node_a).or_default();
+            let _ = entry.insert(node_b);
+
+            let entry = self.neighbors.entry(node_b).or_default();
+            let _ = entry.insert(node_a);
+        }
+
+        /// PANICS: This will panic if you try to subtract more than a connection has.
+        fn sub_capacity(&mut self, capacity_amt: u64, node_a: NodeId, node_b: NodeId) {
+            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            let entry = self.edges.get_mut(&key).unwrap();
+            entry.link_capacity.checked_sub(capacity_amt).unwrap();
+
+            if entry.link_capacity == 0 {
+                self.neighbors.get_mut(&node_a).unwrap().remove(&node_b);
+                self.neighbors.get_mut(&node_b).unwrap().remove(&node_a);
+            }
+        }
+
+        pub fn get_capacity(&self, node_a: NodeId, node_b: NodeId) -> u64 {
+            let key = (std::cmp::min(node_a, node_b), std::cmp::max(node_a, node_b));
+            match self.edges.get(&key) {
+                Some(entangle_edge) => entangle_edge.link_capacity,
+                None => 0,
+            }
+        }
+
+        pub fn tick<R: Rng>(&mut self, interval: TimeMillis, swap_fraction: f64, rng: &mut R) {
+            // TODO(opt): Maybe better to handle decoherences as needed instead of accounting for
+            // everything on every time step.
+            for (node_a, node_b) in self.edges.clone().keys() {
+                // Account for decoherence.
                 let p_single_decay = 1.0 - (-DECOHERENCE_FACTOR * interval as f64).exp();
-                let dist = Binomial::new(entangle_edge.link_capacity, p_single_decay).unwrap();
+                let link_capacity = self.get_capacity(*node_a, *node_b);
+                let dist = Binomial::new(link_capacity, p_single_decay).unwrap();
                 let num_decoherences: u64 = dist.sample(rng);
 
-                entangle_edge.link_capacity = entangle_edge
-                    .link_capacity
-                    .checked_sub(num_decoherences)
-                    .unwrap();
+                self.sub_capacity(num_decoherences, *node_a, *node_b);
+            }
 
-                if entangle_edge.link_capacity == 0 {
-                    // TODO(improvement): for consistency, maybe we should
-                    // figure out a way to fully remove this edge so we
-                    // don't get a bunch of "zero" entries in the log.
+            let neighbor_map_snapshot = self.neighbors.clone();
+            for node in neighbor_map_snapshot.keys() {
+                let neighbors: Vec<NodeId> = match self.neighbors.get(node) {
+                    None => continue,
+                    Some(neighbors) if neighbors.len() == 1 => continue,
+                    Some(neighbors) => neighbors.iter().copied().collect(),
+                };
+
+                // Choose two neighbors and swap swap_fraction of the lower of their channel
+                // capacities. We're going to do this a number of times proportional to the
+                // number of neighbors the node has.
+                for _ in 0..neighbors.len() {
+                    let two_neighbors: Vec<_> = neighbors.choose_multiple(rng, 2).collect();
+                    let (node_a, node_b) = (*two_neighbors[0], *two_neighbors[1]);
+
+                    let cap_a = self.get_capacity(*node, node_a);
+                    let cap_b = self.get_capacity(*node, node_b);
+                    let swap_number = (std::cmp::min(cap_a, cap_b) as f64 * swap_fraction) as u64;
+
+                    self.sub_capacity(swap_number, *node, node_a);
+                    self.sub_capacity(swap_number, *node, node_b);
+                    self.add_capacity(swap_number, node_a, node_b);
                 }
             }
         }
 
         pub fn edges(&self) -> impl Iterator<Item = (NodeId, NodeId, &EntangleEdge)> + '_ {
-            self.map.iter().map(|((a, b), edge)| (*a, *b, edge))
+            self.edges.iter().map(|((a, b), edge)| (*a, *b, edge))
         }
     }
 

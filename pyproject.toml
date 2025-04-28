@@ -1,0 +1,13 @@
+[project]
+name = "preshared-entanglement-sim"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "altair>=5.5.0",
+    "polars>=1.28.1",
+    "vegafusion>=2.0.2",
+    "vegafusion-python-embed>=1.6.9",
+    "vl-convert-python>=1.7.0",
+]

@@ -1,1 +1,4 @@
 /target
+.ropeproject
+.ruff_cache
+.venv
