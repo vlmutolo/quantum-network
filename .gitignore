@@ -1,4 +1,9 @@
-/target
+target
+results
 .ropeproject
 .ruff_cache
 .venv
+
+# macOS
+.DS_Store
+.direnv
