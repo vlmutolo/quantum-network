@@ -436,6 +436,38 @@ pub mod peer {
             graph.sub_capacity(1, 1, 0);
             assert_eq!(0, graph.get_capacity(0, 1));
             assert_eq!(0, graph.get_capacity(1, 0));
+
+            graph.add_capacity(5, 0, 1);
+            assert_eq!(6, graph.get_capacity(0, 1));
+            assert_eq!(6, graph.get_capacity(1, 0));
+        }
+
+        #[test]
+        fn test_max_flow() {
+            let mut graph = EntangleGraph::default();
+
+            graph.add_capacity(8, 0, 1);
+            graph.add_capacity(8, 0, 2);
+            graph.add_capacity(1, 2, 1);
+            graph.add_capacity(8, 1, 3);
+            graph.add_capacity(8, 2, 3);
+
+            assert_eq!(16, graph.max_flow(0, 3));
+
+            let mut graph2 = EntangleGraph::default();
+
+            graph2.add_capacity(3, 0, 1);
+            graph2.add_capacity(3, 1, 3);
+            graph2.add_capacity(2, 3, 5);
+            graph2.add_capacity(7, 0, 2);
+            graph2.add_capacity(5, 2, 1);
+
+            graph2.add_capacity(4, 1, 4);
+            graph2.add_capacity(3, 2, 4);
+            graph2.add_capacity(3, 3, 4);
+            graph2.add_capacity(6, 4, 5);
+
+            assert_eq!(8, graph2.max_flow(0, 5));
         }
     }
 }
