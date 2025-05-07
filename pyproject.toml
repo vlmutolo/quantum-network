@@ -20,7 +20,7 @@ build-backend = "maturin"
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
-module-name = "qnet_sim"
+module-name = "qnet"
 
 [tool.uv]
 # Rebuild package when any rust files change

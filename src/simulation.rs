@@ -1,4 +1,4 @@
-use rand::{Rng, seq::IndexedRandom as _};
+use rand::{Rng, SeedableRng, rngs::SmallRng, seq::IndexedRandom as _};
 use rand_distr::{Binomial, Distribution as _, Poisson};
 
 use crate::graph::{DirectGraph, EntangleGraph, NodeId};
@@ -9,7 +9,10 @@ pub type TimeMillis = u64;
 /// Expected number of events per timestep.
 pub type Rate = f64;
 
+#[pyo3::pyclass(name = "Simulation")]
+#[derive(Clone, Debug)]
 pub struct Simulation {
+    rng: SmallRng,
     params: SimParams,
     direct_graph: DirectGraph,
     entangle_graph: EntangleGraph,
@@ -17,51 +20,37 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn run<R: Rng>(&mut self, stop_time: TimeMillis, rng: &mut R) -> Vec<SimLog> {
-        // TODO(perf): this function should maybe be able to
-        // stream results to a parquet dataframe.
+    pub fn run(&mut self, duration: TimeMillis) {
+        let num_ticks = duration.checked_div(self.params.tick_interval).unwrap();
 
-        let mut logs = Vec::new();
-
-        let num_ticks = stop_time
-            .saturating_sub(self.current_time)
-            .checked_div(self.params.tick_interval)
-            .unwrap();
-
-        for _ in 0..num_ticks - 1 {
-            let tick_log = self.tick(self.params.tick_interval, rng);
-            match self.params.log_frequency {
-                LogFrequency::Final => (),
-                LogFrequency::All => logs.push(tick_log),
-            }
+        for _ in 0..num_ticks {
+            self.tick(self.params.tick_interval);
         }
-
-        let tick_log = self.tick(self.params.tick_interval, rng);
-        logs.push(tick_log);
-
-        logs
     }
 
-    fn tick<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) -> SimLog {
-        self.tick_entangle_graph(interval, rng);
-        self.tick_direct_graph(interval, rng);
+    pub fn entangle_graph(&self) -> &EntangleGraph {
+        &self.entangle_graph
+    }
+
+    pub fn params(&self) -> &SimParams {
+        &self.params
+    }
+
+    pub fn time(&self) -> TimeMillis {
+        self.current_time
+    }
+
+    fn tick(&mut self, interval: TimeMillis) {
+        self.tick_entangle_graph(interval);
+        self.tick_direct_graph(interval);
         self.current_time += interval;
-
-        let max_flow_avg = self.max_flow_avg(rng);
-
-        // TODO(opt): we always create these logs even though they may
-        // not be used. Can we do something smarter?
-        SimLog {
-            entangle_graph: self.entangle_graph.clone(),
-            time: self.current_time,
-            max_flow_avg,
-        }
     }
 
-    fn max_flow_avg<R: Rng>(&mut self, rng: &mut R) -> f64 {
-        const MAX_FLOW_COUNT: u64 = 50;
-        let mut max_flow_sum = 0;
-        for _ in 0..MAX_FLOW_COUNT {
+    pub fn max_flow_stats(&self, n_samples: u64) -> (f64, f64) {
+        // TODO: we should figure out how to use the deterministic rng here.
+        let mut rng = rand::rng();
+        let mut max_flows: Vec<u64> = Vec::with_capacity(n_samples as usize);
+        for _ in 0..n_samples {
             let node_a = rng.random_range(0..self.direct_graph.num_nodes());
             let node_b = loop {
                 let candidate = rng.random_range(0..self.direct_graph.num_nodes());
@@ -70,21 +59,40 @@ impl Simulation {
                 }
             };
 
-            max_flow_sum += self.entangle_graph.max_flow(node_a, node_b);
+            max_flows.push(self.entangle_graph.max_flow(node_a, node_b));
         }
-        max_flow_sum as f64 / MAX_FLOW_COUNT as f64
+
+        // Calculate mean
+        let sum: u64 = max_flows.iter().sum();
+        let avg = sum as f64 / max_flows.len() as f64;
+
+        // Calculate standard deviation
+        let variance = max_flows
+            .iter()
+            .map(|&value| {
+                let diff = value as f64 - avg;
+                diff * diff
+            })
+            .sum::<f64>()
+            / max_flows.len() as f64;
+
+        let std = variance.sqrt();
+
+        (avg, std)
     }
 
-    pub fn tick_direct_graph<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
+    pub fn tick_direct_graph(&mut self, interval: TimeMillis) {
         for (node_a, node_b, direct_edge) in self.direct_graph.edges() {
             let num_pairs_expected = direct_edge.link_rate * interval as f64;
-            let num_pairs_generated = Poisson::new(num_pairs_expected).unwrap().sample(rng);
+            let num_pairs_generated = Poisson::new(num_pairs_expected)
+                .unwrap()
+                .sample(&mut self.rng);
             self.entangle_graph
                 .add_capacity(num_pairs_generated as u64, node_a, node_b);
         }
     }
 
-    pub fn tick_entangle_graph<R: Rng>(&mut self, interval: TimeMillis, rng: &mut R) {
+    pub fn tick_entangle_graph(&mut self, interval: TimeMillis) {
         // TODO(opt): Maybe better to handle decoherences as needed instead of accounting for
         // everything on every time step.
         for (node_a, node_b, _edge_data) in self.entangle_graph.clone().edges() {
@@ -92,7 +100,7 @@ impl Simulation {
             let p_single_decay = 1.0 - (-self.params.decoherence_factor * interval as f64).exp();
             let link_capacity = self.entangle_graph.get_capacity(node_a, node_b);
             let dist = Binomial::new(link_capacity, p_single_decay).unwrap();
-            let num_decoherences: u64 = dist.sample(rng);
+            let num_decoherences: u64 = dist.sample(&mut self.rng);
 
             self.entangle_graph
                 .sub_capacity(num_decoherences, node_a, node_b);
@@ -108,7 +116,7 @@ impl Simulation {
             // capacities. We're going to do this a number of times proportional to the
             // number of neighbors the node has.
             for _ in 0..neighbors.len() {
-                let two_neighbors: Vec<_> = neighbors.choose_multiple(rng, 2).collect();
+                let two_neighbors: Vec<_> = neighbors.choose_multiple(&mut self.rng, 2).collect();
                 let (node_a, node_b) = (*two_neighbors[0], *two_neighbors[1]);
 
                 let cap_a = self.entangle_graph.get_capacity(node, node_a);
@@ -128,16 +136,22 @@ impl Simulation {
         0..self.params.num_nodes
     }
 
-    pub fn new(params: SimParams, direct_graph: DirectGraph) -> Self {
+    pub fn new(params: SimParams) -> Self {
+        let mut rng = SmallRng::from_seed(params.rng_seed);
+        let direct_graph = DirectGraph::random(&params, &mut rng);
+        let entangle_graph = EntangleGraph::default();
         Self {
+            rng,
             params,
-            current_time: 0,
             direct_graph,
-            entangle_graph: EntangleGraph::default(),
+            entangle_graph,
+            current_time: 0,
         }
     }
 }
 
+#[pyo3::pyclass(name = "SimParams", eq, get_all, set_all, str)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SimParams {
     /// This describes what fraction of an entangled channel capacity will
     /// be spent to feed new edges in the entanglement graph.
@@ -145,9 +159,6 @@ pub struct SimParams {
 
     /// How far to advance in time per simulation step.
     pub tick_interval: TimeMillis,
-
-    /// Whether or not to save all intermediate states of the simulation.
-    pub log_frequency: LogFrequency,
 
     /// Controls how fast the qubits decohere.
     pub decoherence_factor: f64,
@@ -161,16 +172,27 @@ pub struct SimParams {
     /// Probability that two nodes will be connected in the direct graph.
     /// This applies only if the graph is generated randomly.
     pub direct_edge_density: f64,
+
+    /// Seed to make the random number generation deterministic.
+    pub rng_seed: [u8; 32],
 }
 
-pub enum LogFrequency {
-    Final,
-    All,
+impl Default for SimParams {
+    fn default() -> Self {
+        Self {
+            swap_fraction: 0.2,
+            tick_interval: 1,
+            decoherence_factor: 0.8,
+            link_rate: 10.0,
+            num_nodes: 50,
+            direct_edge_density: 0.5,
+            rng_seed: [42; 32],
+        }
+    }
 }
 
-/// Summary of a snapshot of the network state
-pub struct SimLog {
-    pub entangle_graph: EntangleGraph,
-    pub time: TimeMillis,
-    pub max_flow_avg: f64,
+impl std::fmt::Display for SimParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self, f)
+    }
 }
