@@ -1,7 +1,8 @@
+use petgraph::graph::NodeIndex;
 use rand::{Rng, SeedableRng, rngs::SmallRng, seq::IndexedRandom as _};
 use rand_distr::{Binomial, Distribution as _, Poisson};
 
-use crate::graph::{DirectGraph, EntangleGraph, NodeId};
+use crate::graph::{DirectGraph, EntangleGraph};
 
 /// This is the base unit of time in the system, in milliseconds.
 pub type TimeMillis = u64;
@@ -59,6 +60,9 @@ impl Simulation {
                 }
             };
 
+            let node_a = NodeIndex::new(node_a);
+            let node_b = NodeIndex::new(node_b);
+
             max_flows.push(self.entangle_graph.max_flow(node_a, node_b));
         }
 
@@ -106,8 +110,8 @@ impl Simulation {
                 .sub_capacity(num_decoherences, node_a, node_b);
         }
 
-        for node in self.nodes() {
-            let neighbors: Vec<NodeId> = self.entangle_graph.neighbors_of(node);
+        for node in self.entangle_graph().nodes() {
+            let neighbors: Vec<NodeIndex> = self.entangle_graph.neighbors_of(node);
             if neighbors.len() < 2 {
                 continue;
             }
@@ -132,14 +136,10 @@ impl Simulation {
         }
     }
 
-    fn nodes(&self) -> impl Iterator<Item = NodeId> + 'static {
-        0..self.params.num_nodes
-    }
-
     pub fn new(params: SimParams) -> Self {
         let mut rng = SmallRng::from_seed(params.rng_seed);
         let direct_graph = DirectGraph::random(&params, &mut rng);
-        let entangle_graph = EntangleGraph::default();
+        let entangle_graph = EntangleGraph::with_node_capacity(params.num_nodes);
         Self {
             rng,
             params,
@@ -167,7 +167,7 @@ pub struct SimParams {
     pub link_rate: Rate,
 
     /// How many nodes to simulate.
-    pub num_nodes: u64,
+    pub num_nodes: usize,
 
     /// Probability that two nodes will be connected in the direct graph.
     /// This applies only if the graph is generated randomly.

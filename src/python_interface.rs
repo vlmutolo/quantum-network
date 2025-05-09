@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::simulation::{self, SimParams, Simulation};
+use petgraph::graph::NodeIndex;
 use pyo3::{prelude::*, types::PyDict};
 
 #[pymodule(name = "qnet")]
@@ -22,10 +23,12 @@ impl Simulation {
         let mut result = Vec::new();
         for a in 0..self.params().num_nodes {
             for b in (a + 1)..self.params().num_nodes {
-                let capacity = self.entangle_graph().get_capacity(a, b);
+                let capacity = self
+                    .entangle_graph()
+                    .get_capacity(NodeIndex::new(a), NodeIndex::new(b));
                 let mut entry = HashMap::new();
-                entry.insert("node_a".to_string(), a);
-                entry.insert("node_b".to_string(), b);
+                entry.insert("node_a".to_string(), a as u64);
+                entry.insert("node_b".to_string(), b as u64);
                 entry.insert("link_capacity".to_string(), capacity);
                 result.push(entry);
             }
