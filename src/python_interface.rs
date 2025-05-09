@@ -45,6 +45,12 @@ impl Simulation {
     fn py_max_flow_stats(&self, n_samples: u64) -> (f64, f64) {
         self.max_flow_stats(n_samples)
     }
+    
+    /// Returns (avg, std) for generalized max flow
+    #[pyo3(name = "generalized_max_flow_stats")]
+    fn py_generalized_max_flow_stats(&self, n_samples: u64) -> (f64, f64) {
+        self.generalized_max_flow_stats(n_samples)
+    }
 
     #[pyo3(name = "time")]
     fn py_time(&self) -> u64 {

@@ -4,6 +4,7 @@ results
 .ropeproject
 .ruff_cache
 .venv
+.zed
 
 # macOS
 .DS_Store

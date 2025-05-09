@@ -22,6 +22,31 @@ impl Default for DirectGraph {
     }
 }
 
+impl Default for EntangleEdge {
+    fn default() -> Self {
+        Self {
+            link_capacity: 0,
+            swap_decay: 1.0, // Default: no loss in flow (traditional max flow)
+        }
+    }
+}
+
+impl EntangleEdge {
+    pub fn with_capacity(capacity: u64) -> Self {
+        Self {
+            link_capacity: capacity,
+            swap_decay: 1.0,
+        }
+    }
+
+    pub fn with_capacity_and_decay(capacity: u64, decay: f64) -> Self {
+        Self {
+            link_capacity: capacity,
+            swap_decay: decay,
+        }
+    }
+}
+
 impl DirectGraph {
     pub fn num_nodes(&self) -> usize {
         self.graph.node_count()
@@ -80,7 +105,7 @@ pub struct DirectEdge {
 
 #[derive(Clone, Debug)]
 pub struct EntangleGraph {
-    graph: Graph<(), EntangleEdge, Undirected>,
+    pub graph: Graph<(), EntangleEdge, Undirected>,
 }
 
 impl EntangleGraph {
@@ -101,6 +126,7 @@ impl EntangleGraph {
                     node_b,
                     EntangleEdge {
                         link_capacity: capacity_amt,
+                        swap_decay: 1.0, // Default value, no decay
                     },
                 );
             }
@@ -180,6 +206,96 @@ impl EntangleGraph {
         }
         Self { graph }
     }
+
+    /// Calculates the generalized maximum flow from source to sink
+    /// using linear programming, accounting for decay factors on edges
+    pub fn generalized_max_flow(&self, src: NodeIndex, dst: NodeIndex) -> f64 {
+        use good_lp::{
+            Expression, Solution, SolverModel, constraint, solvers::microlp::microlp, variable,
+            variables,
+        };
+        use std::collections::HashMap;
+
+        // Number of edges in the graph (each undirected edge becomes two directed edges)
+        let edge_count = self.graph.edge_count() * 2;
+
+        // Create variables for each directed edge: flow amount on that edge.
+        // Index them as (from_node, to_node).
+        let mut edge_vars = Vec::with_capacity(edge_count);
+        let mut edge_indices = HashMap::new();
+
+        let mut variables = variables!();
+
+        // Add directed edges from the undirected graph, with flow variables
+        for edge_ref in self.graph.edge_references() {
+            let u = edge_ref.source();
+            let v = edge_ref.target();
+            let capacity = edge_ref.weight().link_capacity as f64;
+            let decay = edge_ref.weight().swap_decay;
+
+            // Edge from u to v
+            let var_u_to_v = variables.add(variable().min(0.0).max(capacity));
+            edge_indices.insert((u.index(), v.index()), var_u_to_v);
+            edge_vars.push((u.index(), v.index(), var_u_to_v, decay));
+
+            // Edge from v to u
+            let var_v_to_u = variables.add(variable().min(0.0).max(capacity));
+            edge_indices.insert((v.index(), u.index()), var_v_to_u);
+            edge_vars.push((v.index(), u.index(), var_v_to_u, decay));
+        }
+
+        // Create objective: maximize the flow out of the source node
+        let objective: Expression = edge_vars
+            .iter()
+            .filter(|(from, _, _, _)| *from == src.index())
+            .fold(Expression::from(0.0), |acc, (_, _, var_idx, _)| {
+                acc + *var_idx
+            });
+
+        // Start building the problem
+        let mut problem = variables.maximise(objective).using(microlp);
+
+        // Flow conservation constraints for each node (except source and sink)
+        for node in self.graph.node_indices() {
+            if node == src || node == dst {
+                continue;
+            }
+
+            // For each node, incoming flow * decay = outgoing flow
+            let mut outgoing_flow = Expression::from(0.0);
+            for neigh in self.graph.neighbors(node) {
+                if let Some(&var_idx) = edge_indices.get(&(node.index(), neigh.index())) {
+                    outgoing_flow = outgoing_flow + var_idx;
+                }
+            }
+
+            let mut incoming_flow = Expression::from(0.0);
+            for (_from, to, var_idx, decay) in &edge_vars {
+                if *to == node.index() {
+                    incoming_flow = incoming_flow + (*decay * *var_idx);
+                }
+            }
+
+            // Add the flow conservation constraint: sum(incoming*decay) = sum(outgoing)
+            problem = problem.with(constraint!(incoming_flow == outgoing_flow));
+        }
+
+        // Solve with microlp solver (pure Rust)
+        match problem.solve() {
+            Ok(solution) => {
+                // Calculate total outflow from source
+                let mut total_flow = 0.0;
+                for (from, _, var_idx, _) in &edge_vars {
+                    if *from == src.index() {
+                        total_flow += solution.value(*var_idx);
+                    }
+                }
+
+                total_flow
+            }
+            Err(_) => 0.0, // Error occurred
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -187,11 +303,15 @@ pub struct EntangleEdge {
     /// How many Bell pairs have been (successfully) pre-exchanged and
     /// are now in storage waiting to execute teleportation
     pub link_capacity: u64,
+    /// Decay factor representing the loss when swapping through this edge
+    /// A value between 0 and 1 representing the fraction of entanglement preserved
+    pub swap_decay: f64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DirectGraph, EntangleGraph, SimParams};
+    use petgraph::graph::NodeIndex;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -266,5 +386,52 @@ mod tests {
         for (_, _, edge) in &edges {
             assert_eq!(10.0, edge.link_rate);
         }
+    }
+
+    #[test]
+    fn test_generalized_max_flow() {
+        // Create a simple graph for testing
+        let mut graph = EntangleGraph::with_node_capacity(4);
+
+        // Source is node 0, sink is node 3
+        let src = NodeIndex::new(0);
+        let dst = NodeIndex::new(3);
+
+        // Add edges with capacities and decay factors
+        // Path 1: 0 -> 1 -> 3
+        graph.add_capacity(10, src, NodeIndex::new(1));
+        if let Some(edge_idx) = graph.graph.find_edge(src, NodeIndex::new(1)) {
+            let edge = graph.graph.edge_weight_mut(edge_idx).unwrap();
+            edge.swap_decay = 0.8; // 80% efficiency
+        }
+
+        graph.add_capacity(10, NodeIndex::new(1), dst);
+        if let Some(edge_idx) = graph.graph.find_edge(NodeIndex::new(1), dst) {
+            let edge = graph.graph.edge_weight_mut(edge_idx).unwrap();
+            edge.swap_decay = 0.8; // 80% efficiency
+        }
+
+        // Path 2: 0 -> 2 -> 3
+        graph.add_capacity(10, src, NodeIndex::new(2));
+        if let Some(edge_idx) = graph.graph.find_edge(src, NodeIndex::new(2)) {
+            let edge = graph.graph.edge_weight_mut(edge_idx).unwrap();
+            edge.swap_decay = 0.7; // 70% efficiency
+        }
+
+        graph.add_capacity(10, NodeIndex::new(2), dst);
+        if let Some(edge_idx) = graph.graph.find_edge(NodeIndex::new(2), dst) {
+            let edge = graph.graph.edge_weight_mut(edge_idx).unwrap();
+            edge.swap_decay = 0.7; // 70% efficiency
+        }
+
+        // Regular max flow should be 20 (10 through each path)
+        assert_eq!(20, graph.max_flow(src, dst));
+
+        // Generalized max flow with decay should be less
+        // Path 1: 10 * 0.8 * 0.8 = 6.4
+        // Path 2: 10 * 0.7 * 0.7 = 4.9
+        // Total: 11.3
+        let gen_max_flow = graph.generalized_max_flow(src, dst);
+        assert!((gen_max_flow - 11.3).abs() < 0.1); // Allow for small floating point differences
     }
 }

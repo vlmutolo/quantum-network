@@ -84,6 +84,44 @@ impl Simulation {
 
         (avg, std)
     }
+    
+    pub fn generalized_max_flow_stats(&self, n_samples: u64) -> (f64, f64) {
+        // TODO: we should figure out how to use the deterministic rng here.
+        let mut rng = rand::rng();
+        let mut max_flows: Vec<f64> = Vec::with_capacity(n_samples as usize);
+        for _ in 0..n_samples {
+            let node_a = rng.random_range(0..self.direct_graph.num_nodes());
+            let node_b = loop {
+                let candidate = rng.random_range(0..self.direct_graph.num_nodes());
+                if candidate != node_a {
+                    break candidate;
+                }
+            };
+
+            let node_a = NodeIndex::new(node_a);
+            let node_b = NodeIndex::new(node_b);
+
+            max_flows.push(self.entangle_graph.generalized_max_flow(node_a, node_b));
+        }
+
+        // Calculate mean
+        let sum: f64 = max_flows.iter().sum();
+        let avg = sum / max_flows.len() as f64;
+
+        // Calculate standard deviation
+        let variance = max_flows
+            .iter()
+            .map(|&value| {
+                let diff = value - avg;
+                diff * diff
+            })
+            .sum::<f64>()
+            / max_flows.len() as f64;
+
+        let std = variance.sqrt();
+
+        (avg, std)
+    }
 
     pub fn tick_direct_graph(&mut self, interval: TimeMillis) {
         for (node_a, node_b, direct_edge) in self.direct_graph.edges() {
@@ -130,8 +168,16 @@ impl Simulation {
 
                 self.entangle_graph.sub_capacity(swap_number, node, node_a);
                 self.entangle_graph.sub_capacity(swap_number, node, node_b);
+                
+                // Add capacity with the default swap decay
                 self.entangle_graph
                     .add_capacity(swap_number, node_a, node_b);
+                
+                // Set the decay factor for the newly created edge
+                if let Some(edge_idx) = self.entangle_graph.graph.find_edge(node_a, node_b) {
+                    let edge = self.entangle_graph.graph.edge_weight_mut(edge_idx).unwrap();
+                    edge.swap_decay = self.params.default_swap_decay;
+                }
             }
         }
     }
@@ -175,6 +221,10 @@ pub struct SimParams {
 
     /// Seed to make the random number generation deterministic.
     pub rng_seed: [u8; 32],
+    
+    /// Default decay factor for swapped entanglement (0.0 to 1.0)
+    /// Used in generalized max flow calculations
+    pub default_swap_decay: f64,
 }
 
 impl Default for SimParams {
@@ -187,6 +237,7 @@ impl Default for SimParams {
             num_nodes: 50,
             direct_edge_density: 0.5,
             rng_seed: [42; 32],
+            default_swap_decay: 0.9,
         }
     }
 }
