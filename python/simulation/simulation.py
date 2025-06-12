@@ -1,3 +1,4 @@
+import itertools
 import networkx as nx
 import matplotlib.pyplot as plt
 import random
@@ -7,9 +8,11 @@ n = 5                      # Number of nodes
 initial_capacity = 10      # Starting capacity
 time_steps = 50            # Total simulation steps
 generation_rate = 10     # Capacity increase every 10 steps
-swap_rate = 2 
+swap_rate = 3 
 consumption_rates = {}
 edge_with_consumption_non_zero_rate = 4
+swap_count = 0
+swap_count_consumption = 0
 
 def create_graph(n, initial_capacity):
     """
@@ -54,8 +57,10 @@ def draw_graph(G, step):
 
 # Simulation loop
 def simulate(G, consumption_rates, time_steps=50, generation_rate=10, swap_rate=2):
-    edge_states = {(u, v): G[u][v]['capacity'] for u, v in G.edges()}
+    edge_states = {(min(u, v), max(u, v)): G[u][v]['capacity'] for u, v in G.edges()}
     nodes = list(G.nodes())
+    swap_count = 0
+    swap_count_consumption = 0
     
     for t in range(1, time_steps + 1):
         event_type = random.choices(
@@ -68,50 +73,72 @@ def simulate(G, consumption_rates, time_steps=50, generation_rate=10, swap_rate=
 
         if event_type == "generate":
             edge = random.choice(list(G.edges()))
-            edge_states[edge] += 1
-            print(f"[Time {t}] Generated on {edge} → New count: {edge_states[edge]}")
+            u, v = edge
+            edge_states[(min(u,v), max(u, v))] += 1
+            print(f"[Time {t}] Generated on {edge} → New count: {edge_states[(min(u,v), max(u, v))]}")
 
         elif event_type == "consume":
-            edge = random.choices(list(G.edges()), weights=[consumption_rates[e] for e in G.edges()])[0]
-            if edge_states[edge] > 0:
+            u, v = random.sample(nodes, 2)
+            edge = (min(u, v), max(u, v))
+
+            if edge in edge_states and edge_states[edge] > 0:
                 edge_states[edge] -= 1
-                print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
+                print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[(min(u,v), max(u, v))]}")
             else:
-                print(f"[Time {t}] Tried to consume on {edge} but count is 0")
+                try:
+                    path = nx.shortest_path(G, source=u, target=v)
+                    # Try to consume along the full path
+                    can_consume = all(
+                        edge_states.get((min(path[i], path[i+1]), max(path[i], path[i+1])), 0) > 0
+                        for i in range(len(path) - 1)
+                        )
+                    if can_consume:
+                        for i in range(len(path) - 1):
+                            a, b = path[i], path[i+1]
+                            swap_count_consumption+=1
+                            edge_states[(min(a, b), max(a, b))] -= 1
+                            print(f"[Time {t}] Indirect consumption from {u} to {v} via path {path}")
+                    else:
+                        print(f"[Time {t}] Cannot consume: not enough Bell-pairs along path {path}")
+                except nx.NetworkXNoPath:
+                    print(f"[Time {t}] No path exists from {u} to {v} for indirect consumption")
 
         elif event_type == "swap":
             x = random.choice(nodes)
-            neighbors = list(G.successors(x))
+            neighbors = set(G.predecessors(x)).union(set(G.successors(x)))
+            print(neighbors)
             if len(neighbors) < 2:
                 continue
 
-            y, z = random.sample(neighbors, 2)
-            c_xy = edge_states.get((x, y), 0)
-            c_xz = edge_states.get((x, z), 0)
-            c_yz = edge_states.get((y, z), 0)
+            preferable_swaps = []
+            
+            for y, z in itertools.combinations(neighbors, 2):
+                c_xy = edge_states.get((min(x, y), max(x, y)), 0)
+                c_xz = edge_states.get((min(x, z), max(x,z)), 0)
+                c_yz = edge_states.get((min(y, z), max(y,z) ), 0)
+                print(c_xy, c_xz, c_yz)
+                
+                # Check if this is a preferable swap
+                if c_xy > c_yz + 1 and c_xz > c_yz + 1:
+                    preferable_swaps.append(((y, z), c_yz))
 
-            if c_xy > c_yz + 1 and c_xz > c_yz + 1:
-                edge_states[(x, y)] -= 1
-                edge_states[(x, z)] -= 1
-                edge_states[(y, z)] = edge_states.get((y, z), 0) + 1
-                print(f"[Time {t}] Swap by {x}: ({x},{y}) + ({x},{z}) → ({y},{z})")
+
+            if preferable_swaps:
+                # Choose the (y, z) with the smallest c(y,z)
+                (y, z), _ = min(preferable_swaps, key=lambda item: item[1])
+                edge_states[(min(x,y), max(x,y))] -= 1
+                edge_states[(min(x,z), max(x,z))] -= 1
+                edge_states[(min(y,z), max(y,z))] = edge_states.get((min(y,z), max(y,z)), 0) + 1
+                swap_count +=1
+                print(f"[Time {t}] Swap by {x}: ({x},{y}) + ({x},{z}) → ({y},{z}) [Preferable with min count]")
             else:
-                print(f"[Time {t}] {x} attempted swap ({y},{z}) but not preferable")
-
-        # Capacity refresh every 10 steps
-        if t % 10 == 0:
-            for edge in G.edges():
-                edge_states[edge] += generation_rate
-            print(f"[Time {t}] Capacity boost: +{generation_rate} on all edges")
-
+                print(f"[Time {t}] {x} found no preferable swap")
+    
+    print(swap_count, swap_count_consumption)
 
 def main():
     G, consumption_rates = create_graph(n, generation_rate)
 
-    for step in range(0, time_steps + 1):
-        if step % 10 == 0 and step != 0:
-            for u, v in G.edges():
-                G[u][v]['capacity'] += generation_rate
     
     print("Graph edges with capacities:")
     for u, v, attr in G.edges(data=True):
@@ -122,6 +149,8 @@ def main():
         print(f"{edge}: Consumption Rate = {rate}")
 
     simulate(G, consumption_rates, time_steps=50, generation_rate=10, swap_rate=2)
+
+    print(swap_count, swap_count_consumption)
 
 if __name__ == "__main__":
     main()
