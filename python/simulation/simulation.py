@@ -2,17 +2,28 @@ import itertools
 import networkx as nx
 import matplotlib.pyplot as plt
 import random
+import math
 
 # Parameters
 n = 50                     # Number of nodes
 initial_capacity = 20      # Starting capacity
 time_steps = 50            # Total simulation steps
-generation_rate = 80      # Capacity increase every 10 steps
-swap_rate = 500
+generation_rate = 20      # Capacity increase every 10 steps
+swap_rate = 200
 decoherence_rate = 0
 consumption_rates = {}
-distillation_pairs = 1
+distillation_pairs = 5
 edges_with_consumption_non_zero_rate = 50
+
+def generate_recursive_array(D, N=50):
+    f = [0] * (N)
+    f[0] = 0  # Start with f[0]
+    f[1] = D
+    for n in range(2, N):
+        left = f[math.floor(n / 2)]
+        right = f[math.ceil(n / 2)]
+        f[n] = D * (f[left] + f[right])
+    return f
 
 def create_graph(n, initial_capacity):
     """
@@ -26,9 +37,40 @@ def create_graph(n, initial_capacity):
         G (nx.DiGraph): Graph with initialized capacities.
         consumption_rates (dict): Mapping from edge to consumption rate.
     """
+    graph_type = "wrap_grid"
     G = nx.Graph()
-    for i in range(n):
-        G.add_edge(i, (i + 1) % n, capacity=initial_capacity)
+    if graph_type == "cycle":
+        for i in range(n):
+            G.add_edge(i, (i + 1) % n, capacity=initial_capacity)
+    elif graph_type == "line":
+        for i in range(n - 1):
+            G.add_edge(i, i + 1, capacity=initial_capacity)
+    elif graph_type == "wrap_grid":
+        rows = 10
+        cols = 5
+        for i in range(rows):
+            for j in range(cols):
+                current = (i, j)
+                # Wrap-around neighbors
+                right = (i, (j + 1) % cols)
+                down = ((i + 1) % rows, j)
+            
+                # Add edges with wrap-around
+                G.add_edge(current, right, capacity=initial_capacity)
+                G.add_edge(current, down, capacity=initial_capacity)
+    elif graph_type == "non_wrap_grid":
+        rows = 10
+        cols = 5
+        for i in range(rows):
+            for j in range(cols):
+                current = (i, j)
+                # Right neighbor (if not on the last column)
+                if j + 1 < cols:
+                    G.add_edge(current, (i, j + 1), capacity=capacity)
+                # Down neighbor (if not on the last row)
+                if i + 1 < rows:
+                    G.add_edge(current, (i + 1, j), capacity=capacity)
+        
 
     # Select a few edges to have non-zero consumption rates
     nodes = list(range(n))
@@ -51,6 +93,7 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
     nodes = list(G.nodes())
 
     swap_count_over_time = []
+    corrected_consumption_sum_over_time = []
     consumption_sum_over_time = []
     failed_consumption_count_over_time = []
     successful_consumption_count_over_time = []
@@ -60,7 +103,11 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
     swap_count_consumption = 0
     failed_consumption_count = 0
     successful_consumption_count = 0
-    total_bell_pairs_in_graph = 0
+    total_bell_pairs_in_graph = initial_capacity * G.number_of_edges()
+
+    
+
+    distillation_sum_multiplier = generate_recursive_array(distillation_pairs)
     
     for t in range(1, time_steps + 1):
         event_type = random.choices(
@@ -80,9 +127,10 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
 
         elif event_type == "decoherence":
             valid_edges = [edge for edge, cap in edge_states.items() if cap > 1]
-            random_edge = random.choice(valid_edges)
-            edge_states[random_edge] -= 1
-            total_bell_pairs_in_graph -= 1
+            if (valid_edges):
+              random_edge = random.choice(valid_edges)
+              edge_states[random_edge] -= 1
+              total_bell_pairs_in_graph -= 1
 
         elif event_type == "consume":
             u, v = random.sample(nodes, 2)
@@ -92,7 +140,7 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
                 edge_states[edge] -= distillation_pairs
                 #print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
                 path_length = nx.shortest_path_length(G, source=u, target=v)
-                swap_count_consumption += path_length - 1
+                swap_count_consumption += distillation_sum_multiplier[path_length - 1] 
 
                 successful_consumption_count+=1
                 total_bell_pairs_in_graph = total_bell_pairs_in_graph - distillation_pairs
@@ -127,7 +175,9 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
                 #print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
                 path_length = nx.shortest_path_length(G, source=u, target=v)
                 correction_factor += path_length - 1
-            consumption_sum_over_time.append(swap_count_consumption + correction_factor)
+
+            corrected_consumption_sum_over_time.append(swap_count_consumption + correction_factor)
+            consumption_sum_over_time.append(swap_count_consumption)
             failed_consumption_count_over_time.append(failed_consumption_count)
             successful_consumption_count_over_time.append(successful_consumption_count)
             total_bell_pairs_in_graph_over_time.append(total_bell_pairs_in_graph)
@@ -135,6 +185,7 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
     print(swap_count, swap_count_consumption, successful_consumption_count, failed_consumption_count)
     return (swap_count_over_time,
 consumption_sum_over_time,
+corrected_consumption_sum_over_time,
 failed_consumption_count_over_time,
 successful_consumption_count_over_time,
 total_bell_pairs_in_graph_over_time)
@@ -173,22 +224,25 @@ def main():
 
     (swap_count_over_time,
      consumption_sum_over_time,
+corrected_consumption_sum_over_time,
      failed_consumption_count_over_time,
      successful_consumption_count_over_time,
      total_bell_pairs_in_graph_over_time) = simulate(
         G,
         consumption_rates,
-        time_steps=100000,
+        time_steps=200000,
         generation_rate=generation_rate,
         swap_rate=swap_rate)
     plot_metrics(swap_count_over_time,
                  consumption_sum_over_time,
+                 corrected_consumption_sum_over_time,
                  failed_consumption_count_over_time,
                  successful_consumption_count_over_time,
                  total_bell_pairs_in_graph_over_time)
     
 def plot_metrics(swap_counts,
                  consumption_costs,
+                 corrected_consumption_sum_over_time,
                  failed_consumption_count_over_time,
                  successful_consumption_count_over_time,
                  total_bell_pairs_in_graph_over_time):
@@ -197,6 +251,8 @@ def plot_metrics(swap_counts,
     failures = failed_consumption_count_over_time
 
     swap_count_rate = [s / c if (c) > 0 else 0 for s, c in zip(swap_counts, consumption_costs)]
+    corrected_swap_count_rate = [s / c if (c) > 0 else 0 for s, c in zip(swap_counts, corrected_consumption_sum_over_time)]
+
     failure_rate = [f / (s + f) if (s + f) > 0 else 0 for s, f in zip(successes, failures)]
 
     # Create side-by-side subplots
@@ -204,16 +260,19 @@ def plot_metrics(swap_counts,
     
     # --- First plot: Swap-related metrics ---
     axes[0].plot(time_steps[50:], swap_count_rate[50:], label='Swap overhead', marker='o')
+    axes[0].plot(time_steps[50:], corrected_swap_count_rate[50:], label='Corrected Swap Overhead', marker='x')
     axes[0].set_xlabel("1 Time Step = 200 ticks")
     axes[0].set_ylabel("Swap overhead")
     axes[0].set_title(f"{n} nodes swap overhead")
     axes[0].legend()
+    axes[0].set_yscale('log') 
     axes[0].grid(True)
     
     # --- Second plot: Consumption success/failure ---
     axes[1].plot(time_steps, failure_rate, label='failure rate of consumption request', marker='x')
     axes[1].set_xlabel("1 Time Step = 200 ticks")
     axes[1].set_ylabel("failure rate")
+    axes[1].set_yscale('log') 
     axes[1].set_title("Successful vs Failed Consumption Over Time")
     axes[1].legend()
     axes[1].grid(True)
