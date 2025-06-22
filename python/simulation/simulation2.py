@@ -9,6 +9,7 @@ import pandas as pd
 # Parameters
 n = 50                     # Number of nodes
 initial_capacity = 20      # Starting capacity
+time_steps = 50            # Total simulation steps
 generation_rate = 20      # Capacity increase every 10 steps
 swap_rate = 300
 consumption_rates = {}
@@ -25,51 +26,9 @@ def generate_recursive_array(D, N=50):
         f[n] = D * (f[left] + f[right])
     return f
 
-def create_overlay_on_non_wrap_grid_graph(G):
-    rows, cols = 10, 5
-    initial_capacity = 20
-
-    # Add all nodes
-    for i in range(rows):
-        for j in range(cols):
-            G.add_node((i, j))
-
-    # List potential non-wrap-around edges (right and down only if in bounds)
-    edges = []
-    for i in range(rows):
-        for j in range(cols):
-            current = (i, j)
-            if j + 1 < cols:  # right neighbor
-                right = (i, j + 1)
-                edges.append((current, right))
-            if i + 1 < rows:  # down neighbor
-                down = (i + 1, j)
-                edges.append((current, down))
-
-    # Shuffle edges for randomness
-    random.shuffle(edges)
-
-    # Add edges until graph is connected
-    for u, v in edges:
-        G.add_edge(u, v, capacity=initial_capacity)
-        if nx.is_connected(G):
-            break
-
-    # Add a few more random edges for redundancy, but not all
-    extra_edges_to_add = int(0.2 * len(edges))  # Add 20% more edges
-    added = 0
-    for u, v in edges:
-        if not G.has_edge(u, v):
-            G.add_edge(u, v, capacity=initial_capacity)
-            added += 1
-        if added >= extra_edges_to_add:
-            break
-
-    return G
-
 def create_overlay_on_grid_graph(G):
     rows, cols = 10, 5
-    initial_capacity = 20
+    initial_capacity = 1
 
     # Add all nodes
     for i in range(rows):
@@ -141,8 +100,6 @@ def create_graph(n, initial_capacity, graph_type):
                 G.add_edge(current, down, capacity=initial_capacity)
     elif graph_type == "wrap_grid_overlay":
         G = create_overlay_on_grid_graph(G)
-    elif graph_type == "non_wrap_grid_overlay":
-        G = create_overlay_on_non_wrap_grid_graph(G)
     elif graph_type == "non_wrap_grid":
         rows = 10
         cols = 5
@@ -172,25 +129,21 @@ def create_graph(n, initial_capacity, graph_type):
 
     return G, consumption_rates
 
-def is_stabilized(arr, num_last=20, tolerance=0.01):
-    if len(arr) < max(2, num_last):
-        return False
-    last_values = arr[-num_last:]
-    diffs = np.abs(np.diff(last_values))
-    max_diff = np.max(diffs)
-    return max_diff < tolerance
-
-
 # Simulation loop
-def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate, distillation_pairs):
+def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate):
     edge_states = {(min(u, v), max(u, v)): G[u][v]['capacity'] for u, v in G.edges()}
     nodes = list(G.nodes())
 
-    swap_overlay = []
+    swap_count_over_time = []
+    corrected_consumption_sum_over_time = []
+    consumption_sum_over_time = []
+    failed_consumption_count_over_time = []
+    successful_consumption_count_over_time = []
+    total_bell_pairs_in_graph_over_time = []
 
-    total_swap_count = 0
-    optimal_swap_count_direct_graph = 0
-    correct_optimal_swap_count_direct_graph = 0
+    swap_overlay = []
+    swap_count = 0
+    swap_count_consumption = 0
     failed_consumption_count = 0
     successful_consumption_count = 0
     total_bell_pairs_in_graph = initial_capacity * G.number_of_edges()
@@ -220,7 +173,7 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate, disti
                 edge_states[edge] -= distillation_pairs
                 #print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
                 path_length = nx.shortest_path_length(G, source=u, target=v)
-                optimal_swap_count_direct_graph += distillation_sum_multiplier[path_length - 1] 
+                swap_count_consumption += distillation_sum_multiplier[path_length - 1] 
 
                 successful_consumption_count+=1
                 total_bell_pairs_in_graph = total_bell_pairs_in_graph - distillation_pairs
@@ -243,31 +196,38 @@ def simulate(G, consumption_rates, time_steps, generation_rate, swap_rate, disti
                 edge_states[(min(x,y), max(x,y))] -= distillation_pairs
                 edge_states[(min(x,z), max(x,z))] -= distillation_pairs
                 edge_states[(min(y,z), max(y,z))] = edge_states.get((min(y,z), max(y,z)), 0) + 1
-                total_swap_count += 1
+                swap_count += 1
                 total_bell_pairs_in_graph = total_bell_pairs_in_graph - 2 * distillation_pairs + 1
                 # print(f"[Time {t}] Swap by {x}: ({x},{y}) + ({x},{z}) → ({y},{z}) [Preferable with min count]")
 
         if (t % 200 == 0):
-            if (optimal_swap_count_direct_graph > 0):
-                swap_overlay.append(total_swap_count/optimal_swap_count_direct_graph)
+            swap_count_over_time.append(swap_count)
+
+            correction_factor = 0
+            if edge in edge_states and edge_states[edge] > distillation_pairs-1:
+                #print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
+                path_length = nx.shortest_path_length(G, source=u, target=v)
+                correction_factor += path_length - 1
+
+            corrected_consumption_sum_over_time.append(swap_count_consumption + correction_factor)
+            consumption_sum_over_time.append(swap_count_consumption)
+            failed_consumption_count_over_time.append(failed_consumption_count)
+            successful_consumption_count_over_time.append(successful_consumption_count)
+            total_bell_pairs_in_graph_over_time.append(total_bell_pairs_in_graph)
+
+            if (swap_count_consumption > 0):
+                swap_overlay.append(swap_count/swap_count_consumption)
                 if (is_stabilized(swap_overlay)):
                     print(t)
                     break
-
-    correction_factor = 0
-    if edge in edge_states and edge_states[edge] > distillation_pairs-1:
-        #print(f"[Time {t}] Consumed on {edge} → New count: {edge_states[edge]}")
-        path_length = nx.shortest_path_length(G, source=u, target=v)
-        correction_factor += path_length - 1
-
-    correct_optimal_swap_count_direct_graph = optimal_swap_count_direct_graph + correction_factor
     
-    return (total_swap_count,
-            optimal_swap_count_direct_graph,
-            correct_optimal_swap_count_direct_graph,
-            failed_consumption_count,
-            successful_consumption_count,
-            total_bell_pairs_in_graph)
+    print(swap_count, swap_count_consumption, successful_consumption_count, failed_consumption_count)
+    return (swap_count_over_time,
+consumption_sum_over_time,
+corrected_consumption_sum_over_time,
+failed_consumption_count_over_time,
+successful_consumption_count_over_time,
+total_bell_pairs_in_graph_over_time)
 
 def get_neighbours(edge_states, x):
     neighbors = set()
@@ -297,114 +257,43 @@ def get_preferable_swaps(neighbors, edge_states, x):
 
 
 def main():
-    graph_types = ["cycle", "wrap_grid_overlay", "non_wrap_grid_overlay"]
+    graph_types = ["cycle", "wrap_grid_overlay"]
 
     for graph in graph_types: 
-        G, consumption_rates = create_graph(n, generation_rate, graph)
+        G, consumption_rates = create_graph(n, generation_rate, "cycle")
     
         print("Graph edges with capacities:")
         for u, v, attr in G.edges(data=True):
             print(f"Edge ({u} -> {v}): Capacity = {attr['capacity']}")
     
-        total_swaps_array = []
-        optimal_swap_count_direct_graph_array = []
-        correct_optimal_swap_count_direct_graph_array = []
-        failed_consumption_count_array = []
-        successful_consumption_count_array = []
-        total_bell_pairs_in_graph_array = []
+    (swap_count_over_time,
+     consumption_sum_over_time,
+corrected_consumption_sum_over_time,
+     failed_consumption_count_over_time,
+     successful_consumption_count_over_time,
+     total_bell_pairs_in_graph_over_time) = simulate(
+        G,
+        consumption_rates,
+        time_steps=2000000,
+        generation_rate=generation_rate,
+        swap_rate=swap_rate)
+    plot_metrics(swap_count_over_time,
+                 consumption_sum_over_time,
+                 corrected_consumption_sum_over_time,
+                 failed_consumption_count_over_time,
+                 successful_consumption_count_over_time,
+                 total_bell_pairs_in_graph_over_time)
+       
 
-        swap_rates = []
+def is_stabilized(arr, num_last=10, tolerance=0.05):
+    if len(arr) < max(2, num_last):
+        print("Not enough data points to check stabilization.")
+        return False
+    last_values = arr[-num_last:]
+    diffs = np.abs(np.diff(last_values))
+    max_diff = np.max(diffs)
+    return max_diff < tolerance
 
-        for i in range(60, 600, 20):
-           swap_rates.append(i)
-           (total_swap_count,
-                optimal_swap_count_direct_graph,
-                correct_optimal_swap_count_direct_graph,
-                failed_consumption_count,
-                successful_consumption_count,
-                total_bell_pairs_in_graph) = simulate(
-            G,
-            consumption_rates,
-            time_steps=2000000,
-            generation_rate=generation_rate,
-            swap_rate=i,
-            distillation_pairs = 1)
-           
-           total_swaps_array.append(total_swap_count)
-           optimal_swap_count_direct_graph_array.append(optimal_swap_count_direct_graph)
-           correct_optimal_swap_count_direct_graph_array.append(correct_optimal_swap_count_direct_graph)
-           failed_consumption_count_array.append(failed_consumption_count)
-           successful_consumption_count_array.append(successful_consumption_count)
-           total_bell_pairs_in_graph_array.append(total_bell_pairs_in_graph)
-        
-
-        data_dict = {
-            "swap rates": swap_rates,
-            "stabilised total swap count": total_swaps_array,
-            "stabilised optimal direct graph_path_sum": optimal_swap_count_direct_graph_array,
-            "stabilised optimal direct graph_path_sum_corrected": correct_optimal_swap_count_direct_graph_array,
-            "failed consumption count": failed_consumption_count_array,
-            "successful consumption count": successful_consumption_count_array,
-            "total bell pairs in graph": total_bell_pairs_in_graph_array
-        }
-
-        df = pd.DataFrame(data_dict)
-        df.to_csv(f"{graph}_swap_rate_metrics_output.csv", index=False)
-
-    for graph in graph_types: 
-        G, consumption_rates = create_graph(n, generation_rate, graph)
-    
-        print("Graph edges with capacities:")
-        for u, v, attr in G.edges(data=True):
-            print(f"Edge ({u} -> {v}): Capacity = {attr['capacity']}")
-    
-        total_swaps_array = []
-        optimal_swap_count_direct_graph_array = []
-        correct_optimal_swap_count_direct_graph_array = []
-        failed_consumption_count_array = []
-        successful_consumption_count_array = []
-        total_bell_pairs_in_graph_array = []
-
-        distillation_pairs_count = []
-
-        for i in range(1, 8):
-           distillation_pairs_count.append(i)
-           (total_swap_count,
-                optimal_swap_count_direct_graph,
-                correct_optimal_swap_count_direct_graph,
-                failed_consumption_count,
-                successful_consumption_count,
-                total_bell_pairs_in_graph) = simulate(
-            G,
-            consumption_rates,
-            time_steps=2000000,
-            generation_rate=generation_rate,
-            swap_rate=swap_rate,
-            distillation_pairs=i)
-           
-           total_swaps_array.append(total_swap_count)
-           optimal_swap_count_direct_graph_array.append(optimal_swap_count_direct_graph)
-           correct_optimal_swap_count_direct_graph_array.append(correct_optimal_swap_count_direct_graph)
-           failed_consumption_count_array.append(failed_consumption_count)
-           successful_consumption_count_array.append(successful_consumption_count)
-           total_bell_pairs_in_graph_array.append(total_bell_pairs_in_graph)
-        
-
-        data_dict = {
-            "distillation_pairs_count": distillation_pairs_count,
-            "stabilised total swap count": total_swaps_array,
-            "stabilised optimal_direct_graph_path_sum": optimal_swap_count_direct_graph_array,
-            "stabilised optimal_direct_graph_path_sum_corrected": correct_optimal_swap_count_direct_graph_array,
-            "failed consumption count": failed_consumption_count_array,
-            "successful consumption count": successful_consumption_count_array,
-            "total bell pairs in graph": total_bell_pairs_in_graph_array
-        }
-
-        df = pd.DataFrame(data_dict)
-        df.to_csv(f"{graph}_distillation_pair_metrics_output.csv", index=False)
-
-
-    
 def plot_metrics(swap_counts,
                  consumption_costs,
                  corrected_consumption_sum_over_time,
@@ -416,6 +305,9 @@ def plot_metrics(swap_counts,
     failures = failed_consumption_count_over_time
 
     swap_count_rate = [s / c if (c) > 0 else 0 for s, c in zip(swap_counts, consumption_costs)]
+
+    k = is_stabilized(swap_count_rate)
+    print(k)
     corrected_swap_count_rate = [s / c if (c) > 0 else 0 for s, c in zip(swap_counts, corrected_consumption_sum_over_time)]
 
     failure_rate = [f / (s + f) if (s + f) > 0 else 0 for s, f in zip(successes, failures)]
