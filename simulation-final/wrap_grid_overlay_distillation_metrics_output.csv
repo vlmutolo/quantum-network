@@ -1,0 +1,5 @@
+distillation pairs,total swaps,optimal direct path sum,worst direct path sum,total pairs consumed,total bell pairs
+1,530,0,0,0,452
+2,1234,2,2,1,1441
+3,3440,0,0,2,3335
+4,5902,0,0,1,4169

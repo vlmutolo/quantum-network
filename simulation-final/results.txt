@@ -1,0 +1,315 @@
+Distillation pairs: 1
+  Total swaps: 543
+  Optimal direct path sum: 0
+  Worst direct path sum: 0
+  Total pairs consumed: 0
+  Total bell pairs: 361
+
+Distillation pairs: 2
+  Total swaps: 1338
+  Optimal direct path sum: 0
+  Worst direct path sum: 0
+  Total pairs consumed: 0
+  Total bell pairs: 997
+
+Distillation pairs: 3
+  Total swaps: 3254
+  Optimal direct path sum: 108
+  Worst direct path sum: 198
+  Total pairs consumed: 1
+  Total bell pairs: 4218
+
+Distillation pairs: 4
+  Total swaps: 5466
+  Optimal direct path sum: 256
+  Worst direct path sum: 592
+  Total pairs consumed: 2
+  Total bell pairs: 7446
+
+Distillation pairs: 1
+  Total swaps: 530
+  Optimal direct path sum: 0
+  Worst direct path sum: 0
+  Total pairs consumed: 0
+  Total bell pairs: 452
+
+Distillation pairs: 2
+  Total swaps: 1234
+  Optimal direct path sum: 2
+  Worst direct path sum: 2
+  Total pairs consumed: 1
+  Total bell pairs: 1441
+
+Distillation pairs: 3
+  Total swaps: 3440
+  Optimal direct path sum: 0
+  Worst direct path sum: 0
+  Total pairs consumed: 2
+  Total bell pairs: 3335
+
+Distillation pairs: 4
+  Total swaps: 5902
+  Optimal direct path sum: 0
+  Worst direct path sum: 0
+  Total pairs consumed: 1
+  Total bell pairs: 4169
+
+Distillation pairs: 1
+  Total swaps: 48734
+  Optimal direct path sum: 27470
+  Worst direct path sum: 27470
+  Total pairs consumed: 4606
+  Total bell pairs: 2078
+
+Distillation pairs: 2
+  Total swaps: 199276
+  Optimal direct path sum: 104384
+  Worst direct path sum: 983012
+  Total pairs consumed: 1099
+  Total bell pairs: 2617
+
+Distillation pairs: 3
+  Total swaps: 146795
+  Optimal direct path sum: 9126
+  Worst direct path sum: 515286
+  Total pairs consumed: 31
+  Total bell pairs: 6370
+
+Distillation pairs: 3
+  Total swaps: 250557
+  Optimal direct path sum: 20304
+  Worst direct path sum: 1428174
+  Total pairs consumed: 48
+  Total bell pairs: 7726
+
+Distillation pairs: 1
+  Total swaps: 49944
+  Optimal direct path sum: 28556
+  Worst direct path sum: 28556
+  Total pairs consumed: 4279
+  Total bell pairs: 2102
+
+Distillation pairs: 2
+  Total swaps: 248821
+  Optimal direct path sum: 134092
+  Worst direct path sum: 1942228
+  Total pairs consumed: 1104
+  Total bell pairs: 4299
+
+Distillation pairs: 1
+  Total swaps: 64659
+  Optimal direct path sum: 36603
+  Worst direct path sum: 36603
+  Total pairs consumed: 6234
+  Total bell pairs: 1782
+
+Distillation pairs: 2
+  Total swaps: 188220
+  Optimal direct path sum: 99832
+  Worst direct path sum: 1184440
+  Total pairs consumed: 1003
+  Total bell pairs: 4230
+
+Distillation pairs: 3
+  Total swaps: 202255
+  Optimal direct path sum: 17100
+  Worst direct path sum: 852030
+  Total pairs consumed: 48
+  Total bell pairs: 8470
+
+Distillation pairs: 4
+  Total swaps: 1460103
+  Optimal direct path sum: 20144
+  Worst direct path sum: 5237552
+  Total pairs consumed: 11
+  Total bell pairs: 51487
+
+Distillation pairs: 1
+  Total swaps: 31296
+  Optimal direct path sum: 10369
+  Worst direct path sum: 10369
+  Total pairs consumed: 3876
+  Total bell pairs: 2490
+
+Distillation pairs: 2
+  Total swaps: 56203
+  Optimal direct path sum: 15062
+  Worst direct path sum: 22250
+  Total pairs consumed: 679
+  Total bell pairs: 4438
+
+Distillation pairs: 3
+  Total swaps: 197066
+  Optimal direct path sum: 19083
+  Worst direct path sum: 43293
+  Total pairs consumed: 233
+  Total bell pairs: 13816
+
+Distillation pairs: 4
+  Total swaps: 354417
+  Optimal direct path sum: 14272
+  Worst direct path sum: 45520
+  Total pairs consumed: 71
+  Total bell pairs: 53313
+
+nodes: 20
+  Total swaps: 16445
+  Optimal direct path sum: 4868
+  Worst direct path sum: 4868
+  Total pairs consumed: 2522
+  Total bell pairs: 1017
+
+nodes: 30
+  Total swaps: 35991
+  Optimal direct path sum: 10217
+  Worst direct path sum: 10217
+  Total pairs consumed: 2590
+  Total bell pairs: 6983
+
+nodes: 40
+  Total swaps: 45593
+  Optimal direct path sum: 9166
+  Worst direct path sum: 9166
+  Total pairs consumed: 1640
+  Total bell pairs: 4592
+
+nodes: 50
+  Total swaps: 20558
+  Optimal direct path sum: 5155
+  Worst direct path sum: 5155
+  Total pairs consumed: 1607
+  Total bell pairs: 2211
+
+nodes: 60
+  Total swaps: 32730
+  Optimal direct path sum: 6104
+  Worst direct path sum: 6104
+  Total pairs consumed: 1445
+  Total bell pairs: 3909
+
+nodes: 20
+  Total swaps: 12583
+  Optimal direct path sum: 7195
+  Worst direct path sum: 7195
+  Total pairs consumed: 1527
+  Total bell pairs: 784
+
+nodes: 30
+  Total swaps: 29042
+  Optimal direct path sum: 16003
+  Worst direct path sum: 16003
+  Total pairs consumed: 2358
+  Total bell pairs: 1473
+
+nodes: 40
+  Total swaps: 59320
+  Optimal direct path sum: 30432
+  Worst direct path sum: 30432
+  Total pairs consumed: 3253
+  Total bell pairs: 2324
+
+nodes: 50
+  Total swaps: 53047
+  Optimal direct path sum: 16469
+  Worst direct path sum: 16469
+  Total pairs consumed: 1376
+  Total bell pairs: 3467
+
+nodes: 60
+  Total swaps: 74667
+  Optimal direct path sum: 13872
+  Worst direct path sum: 13872
+  Total pairs consumed: 982
+  Total bell pairs: 4408
+
+nodes: 70
+  Total swaps: 99318
+  Optimal direct path sum: 8549
+  Worst direct path sum: 8549
+  Total pairs consumed: 567
+  Total bell pairs: 6216
+
+nodes: 20
+  Total swaps: 23233
+  Optimal direct path sum: 11795
+  Worst direct path sum: 11795
+  Total pairs consumed: 3535
+  Total bell pairs: 738
+
+nodes: 30
+  Total swaps: 52461
+  Optimal direct path sum: 29774
+  Worst direct path sum: 29774
+  Total pairs consumed: 4668
+  Total bell pairs: 2213
+
+nodes: 40
+  Total swaps: 48625
+  Optimal direct path sum: 23917
+  Worst direct path sum: 23917
+  Total pairs consumed: 2755
+  Total bell pairs: 2688
+
+nodes: 50
+  Total swaps: 104144
+  Optimal direct path sum: 48966
+  Worst direct path sum: 48966
+  Total pairs consumed: 4153
+  Total bell pairs: 3667
+
+nodes: 60
+  Total swaps: 92980
+  Optimal direct path sum: 27762
+  Worst direct path sum: 27762
+  Total pairs consumed: 1907
+  Total bell pairs: 4816
+
+nodes: 70
+  Total swaps: 144301
+  Optimal direct path sum: 37534
+  Worst direct path sum: 37534
+  Total pairs consumed: 2437
+  Total bell pairs: 5888
+
+nodes: 20
+  Total swaps: 15719
+  Optimal direct path sum: 4757
+  Worst direct path sum: 4757
+  Total pairs consumed: 3442
+  Total bell pairs: 600
+
+nodes: 30
+  Total swaps: 33084
+  Optimal direct path sum: 10142
+  Worst direct path sum: 10142
+  Total pairs consumed: 3752
+  Total bell pairs: 1106
+
+nodes: 40
+  Total swaps: 38532
+  Optimal direct path sum: 9153
+  Worst direct path sum: 9153
+  Total pairs consumed: 2677
+  Total bell pairs: 3862
+
+nodes: 50
+  Total swaps: 27197
+  Optimal direct path sum: 7785
+  Worst direct path sum: 7785
+  Total pairs consumed: 2586
+  Total bell pairs: 2177
+
+nodes: 60
+  Total swaps: 70319
+  Optimal direct path sum: 10604
+  Worst direct path sum: 10604
+  Total pairs consumed: 2252
+  Total bell pairs: 5860
+
+nodes: 70
+  Total swaps: 87558
+  Optimal direct path sum: 14944
+  Worst direct path sum: 14944
+  Total pairs consumed: 2629
+  Total bell pairs: 7463
+

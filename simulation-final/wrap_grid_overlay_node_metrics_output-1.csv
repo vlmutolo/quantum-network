@@ -1,0 +1,6 @@
+nodes,total swaps,optimal direct path sum,worst direct path sum,total pairs consumed,total bell pairs
+20,16445,4868,4868,2522,1017
+30,35991,10217,10217,2590,6983
+40,45593,9166,9166,1640,4592
+50,20558,5155,5155,1607,2211
+60,32730,6104,6104,1445,3909
